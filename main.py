@@ -16,6 +16,11 @@ def main():
     log_level = config.get("logging", {}).get("level", "INFO")
     setup_logging(level=log_level)
     
+    # Автозапуск локального Qdrant при необходимости
+    from utils.qdrant_runner import ensure_qdrant_started
+    qdrant_config = config.get("qdrant", {})
+    ensure_qdrant_started(qdrant_config)
+    
     # Получаем параметры API из конфигурации
     api_config = config.get("api", {})
     host = api_config.get("host", "0.0.0.0")
