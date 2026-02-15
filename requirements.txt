@@ -1,0 +1,42 @@
+# Core RAG Framework
+llama-index>=0.10.0
+llama-index-vector-stores-qdrant>=0.1.0
+
+# Vector Store
+qdrant-client>=1.7.0
+
+# API Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# OpenAI API client
+openai>=1.0.0
+
+# HTTP Client for GigaChat API
+httpx>=0.25.0
+aiohttp>=3.9.0
+
+# GigaChat API client
+gigachat>=0.1.0
+
+# Configuration
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+
+# SmartChanker (from GitHub)
+git+https://github.com/igorvolk1961/smart_chanker.git
+
+# CFX API Client (локальный)
+-e /home/igorvolk/PycharmProjects/cfx-api-client
+
+# Utilities
+python-multipart>=0.0.6  # For file uploads in FastAPI
+loguru>=0.7.2  # Better logging
+typing_extensions>=4.0.0  # For Python < 3.11 compatibility (Self type)
+
+# Desktop App (optional, will be chosen later)
+# tkinter is included in Python standard library
+# PyQt5/PyQt6 can be added later if needed
+
