@@ -28,8 +28,8 @@ python-dotenv>=1.0.0
 # SmartChanker (from GitHub)
 git+https://github.com/igorvolk1961/smart_chanker.git
 
-# CFX API Client (локальный)
--e /home/igorvolk/PycharmProjects/cfx-api-client
+# CFX API Client (local). Uncomment after fixing setup.py encoding in cfx-api-client repo.
+-e ../cfx-api-client
 
 # Utilities
 python-multipart>=0.0.6  # For file uploads in FastAPI
