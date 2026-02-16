@@ -59,11 +59,9 @@ def create_agent_definition_from_request(
     else:
         tools.extend([FinalAnswerTool, ReasoningTool])
     
-    # Для агента используется системный промпт из sgr-agent-core по умолчанию.
-    # Если задан request.system_prompt, используем его (с заменой {userPost}).
-    # Если не задан, используется дефолтный промпт (также с заменой {userPost}).
-    system_prompt_str = request.system_prompt if request.system_prompt else None
-    
+#    system_prompt_str = request.system_prompt if request.system_prompt else None TODO: здесь нужно проверять не общий system_prompt из запроса а специальный для агента
+    system_prompt_str = None
+
     # Извлекаем информацию о пользователе из контекста для замены {userPost}
     user_info = context.get("userInfo")
     
