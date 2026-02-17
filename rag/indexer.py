@@ -148,12 +148,15 @@ class DocumentIndexer:
             # Объединяем метаданные документа и чанка
             chunk_metadata = chunk_data.get("metadata", {})
             
+            # Тип чанка берем из метаданных (источник истины)
+            chunk_type = chunk_metadata.get("chunk_type")
+            
             # Определяем префикс ID в зависимости от типа чанка
             id_prefix = {
                 "text": "chunk",
                 "toc": "toc",
                 "table": "table"
-            }.get(chunk_type, "chunk")
+            }.get(chunk_type)
             
             node_metadata = {
                 **document_metadata,

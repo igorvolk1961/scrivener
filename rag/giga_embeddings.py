@@ -21,7 +21,7 @@ class GigaEmbedding(BaseEmbedding):
     
     Поддерживает батчинг, retry логику и таймауты.
     GigaEmbeddings - модель от Сбера для работы с русским языком.
-    Размер эмбеддинга: 1024 (по умолчанию для GigaEmbeddings).
+    Размер эмбеддинга: 2560 (по умолчанию для EmbeddingsGigaR).
     """
     
     def __init__(
@@ -29,7 +29,7 @@ class GigaEmbedding(BaseEmbedding):
         credentials: Optional[str] = None,
         scope: str = "GIGACHAT_API_PERS",
         api_url: str = "https://gigachat.devices.sberbank.ru/api/v1",
-        model: str = "Embeddings",
+        model: str = "EmbeddingsGigaR",
         batch_size: int = 10,
         max_retries: int = 3,
         timeout: int = 60,
@@ -47,8 +47,8 @@ class GigaEmbedding(BaseEmbedding):
             max_retries: Максимальное количество попыток при ошибке
             timeout: Таймаут запроса в секундах
         """
-        # GigaEmbeddings имеет размер 1024
-        embedding_dim = 1024
+        # GigaEmbeddings имеет размер 2560
+        embedding_dim = 2560
         
         # Передаем размер эмбеддинга в базовый класс
         super().__init__(model_name=model, embed_dim=embedding_dim, **kwargs)

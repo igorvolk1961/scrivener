@@ -886,8 +886,8 @@ class QdrantService:
             
             # Индексация узлов
             if nodes or toc_nodes or table_nodes:
-#                all_nodes = nodes + toc_nodes + table_nodes
-                all_nodes = nodes
+                all_nodes = nodes + table_nodes
+#                all_nodes = nodes
                 
                 # Обрабатываем чанки порциями, чтобы не перегружать API
                 # Размер порции равен batch_size эмбеддера (по умолчанию 10)
@@ -1080,7 +1080,7 @@ class QdrantService:
         
         # Обработка чанков таблиц
         for idx, table_chunk_data in enumerate(chunker_result.get("table_chunks", [])):
-            text = table_chunk_data.get("text", "")
+            text = table_chunk_data.get("content", "")
             if not text or not text.strip():
                 continue
             

@@ -1040,11 +1040,8 @@ class QdrantService:
                 continue
             
             chunk_metadata = chunk_data.get("metadata", {})
-            # Определяем тип чанка из метаданных (может быть "table", "toc" или "text")
+            # Тип чанка берем из метаданных (источник истины)
             chunk_type = chunk_metadata.get("chunk_type", "text")
-            # Также проверяем наличие table_id как индикатора таблицы
-            if "table_id" in chunk_metadata and chunk_type == "text":
-                chunk_type = "table"
             
             node_metadata = {
                 **doc_metadata,

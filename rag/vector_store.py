@@ -32,7 +32,7 @@ class QdrantVectorStoreManager:
         url: str = "http://localhost:6333",
         api_key: Optional[str] = None,
         collection_name: str = "scrivener_documents",
-        vector_size: int = 1024,
+        vector_size: int = 2560,
         timeout: int = 30
     ):
         """

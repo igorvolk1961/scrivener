@@ -437,13 +437,16 @@ class ChunkerIntegration:
                 
                 # Извлечение метаданных о разделах из чанкера
                 # Пробуем извлечь все возможные поля, связанные с разделами
+                # Определяем тип чанка из метаданных (источник истины)
+                chunk_type = chunk_metadata.get("chunk_type", "text")
+                
                 metadata = {
                     "document_id": document_id,
                     "chunk_index": index,
                     "is_toc": is_toc,
                     "is_table": is_table,
                     # Метаданные о разделах
-                    "chunk_type": chunk_data.get("type", "table" if is_table else ("toc" if is_toc else "text")),
+                    "chunk_type": chunk_type,
                     "section_number": get_metadata_value("section_number", "number", "section_num"),
                     "chunk_number": get_metadata_value("chunk_number"),
                     "word_count": get_metadata_value("word_count"),
@@ -484,7 +487,7 @@ class ChunkerIntegration:
                         "chunk_index": index,
                         "is_toc": is_toc,
                         "is_table": is_table,
-                        "chunk_type": "table" if is_table else ("toc" if is_toc else "text")
+                        "chunk_type": "text"  # По умолчанию для строковых чанков
                     }
                 }
             
