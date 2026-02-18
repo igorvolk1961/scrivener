@@ -74,13 +74,17 @@ class RAGPipeline:
             timeout=giga_config.get("timeout", 60)
         )
         
+        # Получаем размер вектора из объекта эмбеддинга
+        from rag.vector_store import get_embedding_dimension
+        vector_size = get_embedding_dimension(self.embedding)
+        
         # Конфигурация векторного хранилища
         qdrant_config = self.config.get("qdrant", {})
         self.vector_store_manager = QdrantVectorStoreManager(
             url=qdrant_config.get("url", "http://localhost:6333"),
             api_key=qdrant_config.get("api_key"),
             collection_name=qdrant_config.get("collection_name", "scrivener_documents"),
-            vector_size=qdrant_config.get("vector_size", 1024),
+            vector_size=vector_size,
             timeout=qdrant_config.get("timeout", 30)
         )
         

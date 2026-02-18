@@ -112,6 +112,7 @@ class DocumentRetriever:
             results = self.reranker.rerank(query, results, top_k=top_k)
             logger.debug(f"После реранкинга: {len(results)} результатов")
         
+        # Берем топ-k результатов (дедупликация уже выполнена в _hybrid_search)
         final_results = results[:top_k]
         
         # Логируем подробную информацию о результатах поиска и реранкинга
@@ -321,7 +322,7 @@ class DocumentRetriever:
             }
             results.append(chunk_data)
         
-        logger.debug(f"Query API полнотекстовый поиск вернул {len(results)} результатов")
+        logger.info(f"Query API полнотекстовый поиск вернул {len(results)} результатов")
         return results
     
     def _text_search_fallback(
@@ -386,7 +387,7 @@ class DocumentRetriever:
             matched_results.sort(key=lambda x: x["score"], reverse=True)
             results = matched_results[:top_k]
             
-            logger.debug(f"Fallback полнотекстовый поиск вернул {len(results)} результатов")
+            logger.info(f"Fallback полнотекстовый поиск вернул {len(results)} результатов")
             return results
             
         except Exception as e:
@@ -417,25 +418,55 @@ class DocumentRetriever:
         vector_results = self._vector_search(query, self.vector_top_k, filter_metadata)
         text_results = self._text_search(query, self.text_top_k, filter_metadata)
         
-        logger.debug(
+        logger.info(
             f"Гибридный поиск: векторный={len(vector_results)} (top_k={self.vector_top_k}), "
             f"полнотекстовый={len(text_results)} (top_k={self.text_top_k})"
         )
         
-        # Объединяем результаты, убирая дубликаты по ID
+        # Объединяем результаты, убирая дубликаты по ID или по ключу (irvf_id, section_number, chunk_index)
         # Это один и тот же документ, различается только score, который реранкер переоценит
-        combined_results = {}
+        combined_results_by_id = {}
+        combined_results_by_key = {}
         
         # Добавляем все результаты, убирая дубликаты
         for result in vector_results + text_results:
             result_id = result.get("id")
-            if result_id and result_id not in combined_results:
-                combined_results[result_id] = result
+            metadata = result.get("metadata", {})
+            
+            # Пробуем дедупликацию по ID
+            if result_id:
+                if result_id not in combined_results_by_id:
+                    combined_results_by_id[result_id] = result
+                continue
+            
+            # Если ID нет, используем ключ из метаданных
+            chunk_key = (
+                metadata.get("irvf_id", ""),
+                metadata.get("section_number", ""),
+                metadata.get("chunk_index")
+            )
+            if chunk_key not in combined_results_by_key:
+                combined_results_by_key[chunk_key] = result
         
-        # Преобразуем в список
-        merged_results = list(combined_results.values())
+        # Объединяем результаты (приоритет у результатов с ID)
+        merged_results = list(combined_results_by_id.values())
+        # Добавляем результаты без ID, если они не дублируются с результатами с ID
+        for result in combined_results_by_key.values():
+            metadata = result.get("metadata", {})
+            result_id = metadata.get("irvf_id", ""), metadata.get("section_number", ""), metadata.get("chunk_index")
+            # Проверяем, нет ли уже такого чанка в результатах с ID
+            is_duplicate = False
+            for existing_result in merged_results:
+                existing_metadata = existing_result.get("metadata", {})
+                if (existing_metadata.get("irvf_id", "") == metadata.get("irvf_id", "") and
+                    existing_metadata.get("section_number", "") == metadata.get("section_number", "") and
+                    existing_metadata.get("chunk_index") == metadata.get("chunk_index")):
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                merged_results.append(result)
         
-        logger.debug(
+        logger.info(
             f"Объединено результатов: {len(merged_results)} (было: векторный={len(vector_results)}, "
             f"полнотекстовый={len(text_results)})"
         )

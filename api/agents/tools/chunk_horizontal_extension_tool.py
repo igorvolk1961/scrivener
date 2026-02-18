@@ -285,6 +285,77 @@ class ChunkHorizontalExtensionTool(BaseTool):
         
         return None
     
+    def _get_vector_size(self, normalized_url: str, qdrant_config: dict) -> int:
+        """
+        Получение размера вектора из существующей коллекции или из embedding объекта.
+        
+        Args:
+            normalized_url: Нормализованный URL Qdrant
+            qdrant_config: Конфигурация Qdrant
+        
+        Returns:
+            Размер вектора эмбеддинга
+        """
+        from qdrant_client import QdrantClient
+        
+        # Сначала пробуем получить размер из существующей коллекции
+        try:
+            client = QdrantClient(
+                url=normalized_url,
+                api_key=qdrant_config.get("api_key"),
+                timeout=qdrant_config.get("timeout", 30)
+            )
+            collection_name = qdrant_config.get("collection_name", "scrivener_documents")
+            collection_info = client.get_collection(collection_name)
+            
+            if hasattr(collection_info, 'config'):
+                config = collection_info.config
+                if hasattr(config, 'params') and hasattr(config.params, 'vectors'):
+                    vectors_config = config.params.vectors
+                    if hasattr(vectors_config, 'size'):
+                        vector_size = vectors_config.size
+                        logger.debug(f"Размер вектора получен из существующей коллекции: {vector_size}")
+                        return int(vector_size)
+        except Exception as e:
+            logger.debug(f"Не удалось получить размер из существующей коллекции: {e}")
+        
+        # Если коллекция не существует, создаем embedding объект для получения размера
+        try:
+            from rag.giga_embeddings import GigaEmbedding
+            import os
+            
+            # Создаем временный embedding объект для получения размера
+            credentials = os.getenv("GIGACHAT_AUTH_KEY")
+            if credentials:
+                embeddings_config = self._get_cached_config().get("embeddings", {}).get("giga", {})
+                embedding = GigaEmbedding(
+                    credentials=credentials,
+                    scope=embeddings_config.get("scope", "GIGACHAT_API_PERS"),
+                    api_url=embeddings_config.get("api_url", "https://gigachat.devices.sberbank.ru/api/v1"),
+                    model=embeddings_config.get("model", "Embeddings"),
+                    batch_size=embeddings_config.get("batch_size", 10),
+                    max_retries=embeddings_config.get("max_retries", 3),
+                    timeout=embeddings_config.get("timeout", 60)
+                )
+                from rag.vector_store import get_embedding_dimension
+                vector_size = get_embedding_dimension(embedding)
+                logger.debug(f"Размер вектора получен из embedding объекта: {vector_size}")
+                return vector_size
+        except Exception as e:
+            logger.warning(f"Не удалось получить размер из embedding объекта: {e}")
+        
+        # Fallback на конфиг
+        vector_size = qdrant_config.get("vector_size", 1024)
+        logger.warning(f"Используется размер вектора из конфига (fallback): {vector_size}")
+        return vector_size
+    
+    def _get_cached_config(self):
+        """Получение конфигурации с кэшированием."""
+        if ChunkHorizontalExtensionTool._config_cache is None:
+            from utils.config import get_config
+            ChunkHorizontalExtensionTool._config_cache = get_config()
+        return ChunkHorizontalExtensionTool._config_cache
+    
     def _get_vector_store_manager(self, vdb_url: str):
         """Получение или создание адаптера векторного хранилища с кэшированием."""
         from rag.vector_store import QdrantVectorStoreManager
@@ -318,7 +389,10 @@ class ChunkHorizontalExtensionTool(BaseTool):
         if not normalized_url.startswith("http"):
             normalized_url = f"http://{normalized_url}"
         
-        vector_store_cache_key = f"{normalized_url}:{qdrant_config.get('collection_name', 'scrivener_documents')}:{qdrant_config.get('vector_size', 1024)}"
+        # Получаем размер вектора из embedding объекта или из существующей коллекции
+        vector_size = self._get_vector_size(normalized_url, qdrant_config)
+        
+        vector_store_cache_key = f"{normalized_url}:{qdrant_config.get('collection_name', 'scrivener_documents')}:{vector_size}"
         
         if vector_store_cache_key not in ChunkHorizontalExtensionTool._vector_store_cache:
             # Создаем QdrantVectorStoreManager
@@ -326,7 +400,7 @@ class ChunkHorizontalExtensionTool(BaseTool):
                 url=normalized_url,
                 api_key=qdrant_config.get("api_key"),
                 collection_name=qdrant_config.get("collection_name", "scrivener_documents"),
-                vector_size=qdrant_config.get("vector_size", 1024),
+                vector_size=vector_size,
                 timeout=qdrant_config.get("timeout", 30)
             )
             

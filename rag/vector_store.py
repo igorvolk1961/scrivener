@@ -20,6 +20,47 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+def get_embedding_dimension(embedding) -> int:
+    """
+    Получение размера вектора эмбеддинга из объекта эмбеддинга.
+    
+    Args:
+        embedding: Объект эмбеддинга (GigaEmbedding, OllamaEmbedding или BaseEmbedding)
+    
+    Returns:
+        Размер вектора эмбеддинга
+    
+    Raises:
+        ValueError: Если не удалось определить размер вектора
+    """
+    # Пробуем получить из атрибута embedding_dim (используется в GigaEmbedding и OllamaEmbedding)
+    if hasattr(embedding, 'embedding_dim'):
+        dim = getattr(embedding, 'embedding_dim')
+        if dim is not None:
+            return int(dim)
+    
+    # Пробуем получить из атрибута embed_dim (из BaseEmbedding)
+    if hasattr(embedding, 'embed_dim'):
+        dim = getattr(embedding, 'embed_dim')
+        if dim is not None:
+            return int(dim)
+    
+    # Если не удалось получить, пробуем получить реальный размер из первого эмбеддинга
+    try:
+        # Пробуем получить эмбеддинг для тестового текста
+        test_embedding = embedding.get_query_embedding("test")
+        if test_embedding and isinstance(test_embedding, list):
+            return len(test_embedding)
+    except Exception:
+        pass
+    
+    # Если ничего не помогло, выбрасываем ошибку
+    raise ValueError(
+        f"Не удалось определить размер вектора эмбеддинга из объекта {type(embedding).__name__}. "
+        "Убедитесь, что объект эмбеддинга имеет атрибут embedding_dim или embed_dim."
+    )
+
+
 class QdrantVectorStoreManager:
     """
     Менеджер для работы с Qdrant векторным хранилищем.
@@ -66,6 +107,7 @@ class QdrantVectorStoreManager:
     def ensure_collection_exists(self, recreate: bool = False) -> None:
         """
         Создание коллекции, если она не существует.
+        Проверяет соответствие размера вектора существующей коллекции.
         
         Args:
             recreate: Пересоздать коллекцию, если она уже существует
@@ -83,11 +125,34 @@ class QdrantVectorStoreManager:
                     self.client.delete_collection(self.collection_name)
                     collection_exists = False
                 else:
-                    logger.info(f"Коллекция {self.collection_name} уже существует")
+                    # Проверяем соответствие размера вектора существующей коллекции
+                    collection_info = self.client.get_collection(self.collection_name)
+                    existing_vector_size = None
+                    
+                    if hasattr(collection_info, 'config'):
+                        config = collection_info.config
+                        if hasattr(config, 'params') and hasattr(config.params, 'vectors'):
+                            vectors_config = config.params.vectors
+                            if hasattr(vectors_config, 'size'):
+                                existing_vector_size = vectors_config.size
+                    
+                    if existing_vector_size is not None and existing_vector_size != self.vector_size:
+                        error_msg = (
+                            f"Несоответствие размера вектора эмбеддинга! "
+                            f"Коллекция '{self.collection_name}' имеет размер вектора {existing_vector_size}, "
+                            f"а текущий эмбеддер создает векторы размером {self.vector_size}. "
+                            f"Нельзя использовать эмбеддер с другим размером вектора для существующей коллекции. "
+                            f"Либо используйте другой эмбеддер (с размером {existing_vector_size}), "
+                            f"либо пересоздайте коллекцию с параметром recreate=True."
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    
+                    logger.info(f"Коллекция {self.collection_name} уже существует (размер вектора: {existing_vector_size or 'неизвестен'})")
                     return
             
             if not collection_exists:
-                logger.info(f"Создание коллекции: {self.collection_name}")
+                logger.info(f"Создание коллекции: {self.collection_name} с размером вектора: {self.vector_size}")
                 
                 self.client.create_collection(
                     collection_name=self.collection_name,
@@ -97,7 +162,7 @@ class QdrantVectorStoreManager:
                     )
                 )
                 
-                logger.info(f"Коллекция {self.collection_name} успешно создана")
+                logger.info(f"Коллекция {self.collection_name} успешно создана с размером вектора: {self.vector_size}")
             
         except Exception as e:
             logger.error(f"Ошибка при создании коллекции: {e}", exc_info=True)

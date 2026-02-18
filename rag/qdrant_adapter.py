@@ -113,7 +113,7 @@ class QdrantAdapter(VectorStoreInterface):
         """
         must_conditions = []
         
-        # irvf_id - обязательный фильтр
+        # irvf_id - опциональный фильтр (если указан)
         if "irvf_id" in filters and filters["irvf_id"]:
             must_conditions.append(
                 FieldCondition(
@@ -210,4 +210,54 @@ class QdrantAdapter(VectorStoreInterface):
                 return False
         
         return True
+    
+    def get_chunks_by_ids(
+        self,
+        chunk_ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Получение чанков по их уникальным ID (point.id из Qdrant).
+        
+        Args:
+            chunk_ids: Список уникальных ID чанков (UUID строки)
+        
+        Returns:
+            Список словарей с данными чанков
+        """
+        if not chunk_ids:
+            return []
+        
+        try:
+            # Получаем точки по ID через retrieve
+            results = self._vector_store_manager.client.retrieve(
+                collection_name=self._collection_name,
+                ids=chunk_ids,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            chunks = []
+            for point in results:
+                if point is None:
+                    continue
+                    
+                payload = point.payload if point.payload else {}
+                text = payload.get("text", "")
+                
+                chunk_data = {
+                    "text": text,
+                    "metadata": {k: v for k, v in payload.items() if k != "text"},
+                    "id": str(point.id) if hasattr(point, 'id') else None
+                }
+                chunks.append(chunk_data)
+            
+            logger.debug(f"Получено {len(chunks)} чанков по {len(chunk_ids)} ID")
+            return chunks
+            
+        except Exception as e:
+            logger.error(
+                f"Ошибка при получении чанков по ID: {e}",
+                exc_info=True
+            )
+            return []
 
