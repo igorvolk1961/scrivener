@@ -24,40 +24,53 @@ def get_embedding_dimension(embedding) -> int:
     """
     Получение размера вектора эмбеддинга из объекта эмбеддинга.
     
+    ВАЖНО: Выполняет пробный запрос к API для определения размера ТОЛЬКО один раз,
+    затем сохраняет результат в объекте эмбеддинга и использует его для всех последующих вызовов.
+    Не использует жестко закодированные значения или привязки к конкретным моделям.
+    
     Args:
-        embedding: Объект эмбеддинга (GigaEmbedding, OllamaEmbedding или BaseEmbedding)
+        embedding: Объект эмбеддинга (GigaEmbedding или BaseEmbedding)
     
     Returns:
         Размер вектора эмбеддинга
     
     Raises:
-        ValueError: Если не удалось определить размер вектора
+        ValueError: Если не удалось определить размер вектора через пробный запрос
     """
-    # Пробуем получить из атрибута embedding_dim (используется в GigaEmbedding и OllamaEmbedding)
-    if hasattr(embedding, 'embedding_dim'):
-        dim = getattr(embedding, 'embedding_dim')
-        if dim is not None:
-            return int(dim)
+    # Проверяем, есть ли уже сохраненный размер вектора в объекте эмбеддинга
+    if hasattr(embedding, '_cached_vector_dimension') and embedding._cached_vector_dimension is not None:
+        logger.debug(f"Используется сохраненный размер вектора из предыдущего пробного запроса: {embedding._cached_vector_dimension}")
+        return embedding._cached_vector_dimension
     
-    # Пробуем получить из атрибута embed_dim (из BaseEmbedding)
-    if hasattr(embedding, 'embed_dim'):
-        dim = getattr(embedding, 'embed_dim')
-        if dim is not None:
-            return int(dim)
-    
-    # Если не удалось получить, пробуем получить реальный размер из первого эмбеддинга
+    # Выполняем пробный запрос к API для определения размера
+    # Это единственный надежный способ определить реальный размер вектора
     try:
         # Пробуем получить эмбеддинг для тестового текста
         test_embedding = embedding.get_query_embedding("test")
         if test_embedding and isinstance(test_embedding, list):
-            return len(test_embedding)
-    except Exception:
-        pass
+            actual_dim = len(test_embedding)
+            logger.info(f"Размер вектора определен из пробного запроса к API: {actual_dim}")
+            
+            # Сохраняем результат пробного запроса в объекте эмбеддинга для дальнейшего использования
+            object.__setattr__(embedding, '_cached_vector_dimension', actual_dim)
+            # Также обновляем embedding_dim для совместимости
+            if hasattr(embedding, 'embedding_dim'):
+                object.__setattr__(embedding, 'embedding_dim', actual_dim)
+            if hasattr(embedding, 'embed_dim'):
+                object.__setattr__(embedding, 'embed_dim', actual_dim)
+            
+            return actual_dim
+    except Exception as e:
+        logger.error(f"Не удалось определить размер вектора через пробный запрос к API: {e}")
+        raise ValueError(
+            f"Не удалось определить размер вектора эмбеддинга через пробный запрос к API. "
+            f"Ошибка: {e}"
+        )
     
-    # Если ничего не помогло, выбрасываем ошибку
+    # Если запрос не вернул список, выбрасываем ошибку
     raise ValueError(
         f"Не удалось определить размер вектора эмбеддинга из объекта {type(embedding).__name__}. "
-        "Убедитесь, что объект эмбеддинга имеет атрибут embedding_dim или embed_dim."
+        "Пробный запрос к API не вернул валидный вектор."
     )
 
 
@@ -73,7 +86,7 @@ class QdrantVectorStoreManager:
         url: str = "http://localhost:6333",
         api_key: Optional[str] = None,
         collection_name: str = "scrivener_documents",
-        vector_size: int = 2560,
+        vector_size: Optional[int] = None,
         timeout: int = 30
     ):
         """
@@ -83,7 +96,7 @@ class QdrantVectorStoreManager:
             url: URL Qdrant сервера
             api_key: API ключ (если требуется)
             collection_name: Имя коллекции
-            vector_size: Размер вектора эмбеддинга
+            vector_size: Размер вектора эмбеддинга (может быть None, будет определен через пробный запрос к API)
             timeout: Таймаут подключения
         """
         self.url = url
@@ -104,13 +117,16 @@ class QdrantVectorStoreManager:
             f"collection={collection_name}, vector_size={vector_size}"
         )
     
-    def ensure_collection_exists(self, recreate: bool = False) -> None:
+    def ensure_collection_exists(self, recreate: bool = False, embedding = None) -> None:
         """
         Создание коллекции, если она не существует.
         Проверяет соответствие размера вектора существующей коллекции.
+        Если коллекция не существует и передан объект эмбеддинга, выполняет пробный запрос
+        для определения размера вектора перед созданием коллекции.
         
         Args:
             recreate: Пересоздать коллекцию, если она уже существует
+            embedding: Опциональный объект эмбеддинга для определения размера вектора
         """
         try:
             # Проверяем существование коллекции
@@ -136,7 +152,11 @@ class QdrantVectorStoreManager:
                             if hasattr(vectors_config, 'size'):
                                 existing_vector_size = vectors_config.size
                     
-                    if existing_vector_size is not None and existing_vector_size != self.vector_size:
+                    # Если размер вектора не был определен при инициализации, используем размер из коллекции
+                    if self.vector_size is None and existing_vector_size is not None:
+                        self.vector_size = existing_vector_size
+                        logger.info(f"Размер вектора определен из существующей коллекции: {self.vector_size}")
+                    elif existing_vector_size is not None and self.vector_size is not None and existing_vector_size != self.vector_size:
                         error_msg = (
                             f"Несоответствие размера вектора эмбеддинга! "
                             f"Коллекция '{self.collection_name}' имеет размер вектора {existing_vector_size}, "
@@ -152,6 +172,29 @@ class QdrantVectorStoreManager:
                     return
             
             if not collection_exists:
+                # Если коллекция не существует, ОБЯЗАТЕЛЬНО нужен объект эмбеддинга для пробного запроса
+                if embedding is None:
+                    raise ValueError(
+                        f"Для создания коллекции '{self.collection_name}' необходим объект эмбеддинга "
+                        f"для определения размера вектора через пробный запрос к API. "
+                        f"Передайте параметр embedding в ensure_collection_exists()."
+                    )
+                
+                # Выполняем пробный запрос для определения размера вектора перед созданием коллекции
+                try:
+                    logger.info(f"Выполнение пробного запроса к сервису эмбеддингов для определения размера вектора...")
+                    actual_vector_size = get_embedding_dimension(embedding)
+                    logger.info(f"Размер вектора определен из сервиса эмбеддингов через пробный запрос: {actual_vector_size}")
+                    
+                    # Обновляем размер вектора в менеджере
+                    self.vector_size = actual_vector_size
+                except Exception as e:
+                    logger.error(f"Не удалось определить размер вектора из сервиса эмбеддингов через пробный запрос: {e}")
+                    raise ValueError(
+                        f"Не удалось определить размер вектора эмбеддинга через пробный запрос к API. "
+                        f"Ошибка: {e}"
+                    )
+                
                 logger.info(f"Создание коллекции: {self.collection_name} с размером вектора: {self.vector_size}")
                 
                 self.client.create_collection(

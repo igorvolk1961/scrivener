@@ -390,11 +390,12 @@ async def check_qdrant_health(
             vdb_url = f"http://{vdb_url}"
         
         # Создаем временный менеджер для проверки подключения
+        # Размер вектора не критичен для проверки подключения (используем None)
         vector_store_manager = QdrantVectorStoreManager(
             url=vdb_url,
             api_key=qdrant_config.get("api_key"),
             collection_name="temp",  # Временное имя, не используется
-            vector_size=qdrant_config.get("vector_size", 1024),
+            vector_size=None,  # Не используется для проверки подключения
             timeout=5  # Короткий таймаут для быстрой проверки
         )
         

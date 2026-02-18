@@ -149,6 +149,9 @@ data/input/
 data/output/
 data/chunks/  # Результаты обработки документов
 data/qdrant_storage/  # Хранилище Qdrant
+# Qdrant lock files
+**/LOCK
+**/*.lock
 logs/
 *.log
 

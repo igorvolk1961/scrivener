@@ -49,29 +49,6 @@ Qdrant должен быть запущен локально.
   f:/programs/qdrant/qdrant.exe --config-path f:/programs/qdrant/qdrant_config.yaml
   ```
 
-### 1.4 Ollama
-
-Ollama должен быть запущен с установленной моделью.
-
-**Проверка:**
-```bash
-# Проверка, что Ollama запущен
-curl http://localhost:11434/api/tags
-
-# Проверка наличия модели
-ollama list
-```
-
-**Если модель не установлена:**
-```bash
-# Установка модели (может занять время)
-ollama pull jeffh/intfloat-multilingual-e5-large:q8_0
-```
-
-**Если Ollama не запущен:**
-- Запустите Ollama сервис
-- Или запустите через командную строку: `ollama serve`
-
 ## Шаг 2: Настройка конфигурации
 
 ### 2.1 Проверка config.yaml
@@ -80,7 +57,7 @@ ollama pull jeffh/intfloat-multilingual-e5-large:q8_0
 - `qdrant.executable_path` - путь к Qdrant
 - `qdrant.config_path` - путь к конфигу Qdrant
 - `qdrant.url` - URL Qdrant API (по умолчанию `http://localhost:6333`)
-- `embeddings.api_url` - URL Ollama API (по умолчанию `http://localhost:11434/v1`)
+- `embeddings.api_url` - URL GigaChat API для эмбеддингов
 
 ### 2.2 Создание .env файла (опционально)
 
@@ -100,7 +77,7 @@ python example_usage.py
 ```
 
 Этот скрипт:
-- Проверяет подключение к Qdrant и Ollama
+- Проверяет подключение к Qdrant
 - Показывает информацию о коллекции
 - Содержит закомментированные примеры для индексации и поиска
 
@@ -175,17 +152,6 @@ ConnectionError: Could not connect to Qdrant
 - Убедитесь, что Qdrant запущен
 - Проверьте URL в `config.yaml` (по умолчанию `http://localhost:6333`)
 - Проверьте, что порт не занят другим процессом
-
-### Ошибка подключения к Ollama
-
-```
-httpx.ConnectError: Connection refused
-```
-
-**Решение:**
-- Убедитесь, что Ollama запущен: `ollama serve`
-- Проверьте URL в `config.yaml` (по умолчанию `http://localhost:11434/v1`)
-- Проверьте, что модель установлена: `ollama list`
 
 ### Ошибка импорта SmartChanker
 

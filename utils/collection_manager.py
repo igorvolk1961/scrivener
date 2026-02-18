@@ -30,11 +30,13 @@ class CollectionManager:
         if vector_store_manager is None:
             config = get_config()
             qdrant_config = config.get("qdrant", {})
+            # Размер вектора будет определен из существующей коллекции или через пробный запрос
+            # Для операций чтения можно использовать None, размер определится из коллекции
             vector_store_manager = QdrantVectorStoreManager(
                 url=qdrant_config.get("url", "http://localhost:6333"),
                 api_key=qdrant_config.get("api_key"),
                 collection_name=qdrant_config.get("collection_name", "scrivener_documents"),
-                vector_size=qdrant_config.get("vector_size", 1024),
+                vector_size=None,  # Будет определен из существующей коллекции
                 timeout=qdrant_config.get("timeout", 30)
             )
         

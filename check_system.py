@@ -4,9 +4,8 @@
 Проверяет:
 1. Установленные зависимости
 2. Подключение к Qdrant
-3. Подключение к Ollama
-4. Наличие модели эмбеддингов
-5. Конфигурационные файлы
+3. Конфигурационные файлы
+4. RAG компоненты
 """
 
 import sys
@@ -108,46 +107,6 @@ def check_qdrant():
         return False
 
 
-def check_ollama():
-    """Проверка подключения к Ollama."""
-    try:
-        import httpx
-        response = httpx.get("http://localhost:11434/api/tags", timeout=5)
-        if response.status_code == 200:
-            logger.info("✓ Ollama доступен на http://localhost:11434")
-            
-            # Проверка наличия модели
-            data = response.json()
-            models = [model.get('name', '') for model in data.get('models', [])]
-            target_model = "jeffh/intfloat-multilingual-e5-large:q8_0"
-            
-            # Проверяем точное совпадение или частичное
-            found = False
-            for model in models:
-                if target_model in model or model in target_model:
-                    logger.info(f"✓ Модель найдена: {model}")
-                    found = True
-                    break
-            
-            if not found:
-                logger.warning(f"⚠ Модель {target_model} не найдена в списке установленных")
-                logger.warning(f"  Установленные модели: {', '.join(models) if models else 'нет'}")
-                logger.warning(f"  Установите модель: ollama pull {target_model}")
-                return False
-            
-            return True
-        else:
-            logger.error(f"✗ Ollama вернул статус {response.status_code}")
-            return False
-    except httpx.ConnectError:
-        logger.error("✗ Не удалось подключиться к Ollama на http://localhost:11434")
-        logger.error("  Убедитесь, что Ollama запущен: ollama serve")
-        return False
-    except Exception as e:
-        logger.error(f"✗ Ошибка при проверке Ollama: {e}")
-        return False
-
-
 def check_config_files():
     """Проверка наличия конфигурационных файлов."""
     config_files = {
@@ -176,7 +135,6 @@ def check_rag_pipeline():
     """Проверка инициализации RAG-пайплайна."""
     try:
         from utils.config import get_config
-        from rag.embeddings import OllamaEmbedding
         from rag.vector_store import QdrantVectorStoreManager
         from rag.chunker_integration import ChunkerIntegration
         
@@ -186,23 +144,10 @@ def check_rag_pipeline():
         logger.info("✓ Конфигурация загружена")
         
         # Проверка компонентов (без полной инициализации)
-        embeddings_config = config.get("embeddings", {})
         qdrant_config = config.get("qdrant", {})
         chunker_config = config.get("chunker", {})
         
         logger.info("✓ Конфигурационные секции найдены")
-        
-        # Попытка создания компонентов
-        try:
-            embedding = OllamaEmbedding(
-                model=embeddings_config.get("model", "jeffh/intfloat-multilingual-e5-large:q8_0"),
-                api_url=embeddings_config.get("api_url", "http://localhost:11434/v1"),
-                batch_size=embeddings_config.get("batch_size", 8)
-            )
-            logger.info("✓ OllamaEmbedding создан")
-        except Exception as e:
-            logger.error(f"✗ Ошибка при создании OllamaEmbedding: {e}")
-            return False
         
         try:
             vector_store = QdrantVectorStoreManager(
@@ -243,7 +188,6 @@ def main():
         ("Зависимости Python", check_dependencies),
         ("Конфигурационные файлы", check_config_files),
         ("Подключение к Qdrant", check_qdrant),
-        ("Подключение к Ollama", check_ollama),
         ("RAG компоненты", check_rag_pipeline),
     ]
     

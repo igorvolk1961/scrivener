@@ -12,7 +12,6 @@
   "embeddings": {
     "api_key": "M2RjNGFkZGEtOTA0MS00MzI0LTlmNzUtNzczNTIxNmQ0Zjk1OmFmNzE0NWQ3LWY5NDQtNGExNC05ZmZmLWEzYjE3Zjk5MjgwYw==",
     "url": "https://gigachat.devices.sberbank.ru/api/v1",
-#    "model": "EmbeddingsGigaR",
     "model": "Embeddings"
   },
   "qdrant": {

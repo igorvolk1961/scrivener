@@ -255,12 +255,13 @@ class QdrantService:
             if not vdb_url.startswith("http"):
                 vdb_url = f"http://{vdb_url}"
             
+            # Для операций чтения размер вектора определится из существующей коллекции
             try:
                 vector_store_manager = QdrantVectorStoreManager(
                     url=vdb_url,
                     api_key=qdrant_config.get("api_key"),
                     collection_name=qdrant_config.get("collection_name", "scrivener_documents"),
-                    vector_size=qdrant_config.get("vector_size", 1024),
+                    vector_size=None,  # Размер определится из существующей коллекции
                     timeout=qdrant_config.get("timeout", 30)
                 )
             except Exception as init_error:
@@ -355,12 +356,13 @@ class QdrantService:
             if not vdb_url.startswith("http"):
                 vdb_url = f"http://{vdb_url}"
             
+            # Для операций чтения размер вектора определится из существующей коллекции
             try:
                 vector_store_manager = QdrantVectorStoreManager(
                     url=vdb_url,
                     api_key=qdrant_config.get("api_key"),
                     collection_name=qdrant_config.get("collection_name", "scrivener_documents"),
-                    vector_size=qdrant_config.get("vector_size", 1024),
+                    vector_size=None,  # Размер определится из существующей коллекции
                     timeout=qdrant_config.get("timeout", 30)
                 )
             except Exception as init_error:
@@ -744,12 +746,40 @@ class QdrantService:
                 max_retries=max_retries,
                 timeout=timeout
             )
+            # Определяем размер вектора через пробный запрос и сохраняем в объекте эмбеддинга
+            from rag.vector_store import get_embedding_dimension
+            try:
+                vector_dimension = get_embedding_dimension(embedding)
+                logger.info(f"Размер вектора определен через пробный запрос для модели {final_model}: {vector_dimension}")
+            except Exception as e:
+                logger.error(f"Не удалось определить размер вектора через пробный запрос для модели {final_model}: {e}")
+                raise ValueError(
+                    f"Не удалось определить размер вектора эмбеддинга через пробный запрос к API для модели {final_model}. "
+                    f"Ошибка: {e}"
+                )
             QdrantService._embedding_cache[cache_key] = embedding
-            logger.debug(f"Создан новый объект GigaEmbedding для {final_api_url}/{final_model} (кэширован)")
+            logger.debug(f"Создан новый объект GigaEmbedding для {final_api_url}/{final_model} (кэширован, размер вектора: {vector_dimension})")
+        else:
+            # Объект уже в кэше - проверяем, есть ли сохраненный размер вектора
+            embedding = QdrantService._embedding_cache[cache_key]
+            if not hasattr(embedding, '_cached_vector_dimension') or embedding._cached_vector_dimension is None:
+                # Размер вектора не был сохранен ранее - определяем через пробный запрос
+                from rag.vector_store import get_embedding_dimension
+                try:
+                    vector_dimension = get_embedding_dimension(embedding)
+                    logger.info(f"Размер вектора определен через пробный запрос для кэшированной модели {final_model}: {vector_dimension}")
+                except Exception as e:
+                    logger.error(f"Не удалось определить размер вектора через пробный запрос для кэшированной модели {final_model}: {e}")
+                    raise ValueError(
+                        f"Не удалось определить размер вектора эмбеддинга через пробный запрос к API для модели {final_model}. "
+                        f"Ошибка: {e}"
+                    )
+            else:
+                logger.debug(f"Используется сохраненный размер вектора из кэша для модели {final_model}: {embedding._cached_vector_dimension}")
         
         return QdrantService._embedding_cache[cache_key]
     
-    def _get_cached_vector_store(self, vdb_url: str, collection_name: str, vector_size: int, timeout: int, api_key: str = None):
+    def _get_cached_vector_store(self, vdb_url: str, collection_name: str, vector_size: int, timeout: int, api_key: str = None, embedding = None):
         """Получение объекта векторного хранилища с кэшированием по ключу vdb_url."""
         # Нормализация URL для использования в качестве ключа кэша
         normalized_url = vdb_url.strip().rstrip("/")
@@ -770,7 +800,8 @@ class QdrantService:
             )
             
             # Убеждаемся, что коллекция существует (только при первом создании)
-            vector_store_manager.ensure_collection_exists()
+            # Передаем объект эмбеддинга для выполнения пробного запроса перед созданием коллекции
+            vector_store_manager.ensure_collection_exists(embedding=embedding)
             
             QdrantService._vector_store_cache[cache_key] = vector_store_manager
             logger.debug(f"Создан новый объект QdrantVectorStoreManager для {normalized_url} (кэширован)")
@@ -805,12 +836,30 @@ class QdrantService:
         if not vdb_url.startswith("http"):
             vdb_url = f"http://{vdb_url}"
         
+        # Используем сохраненный размер вектора из объекта эмбеддинга (определен при создании/получении из кэша)
+        if hasattr(embedding, '_cached_vector_dimension') and embedding._cached_vector_dimension is not None:
+            vector_size = embedding._cached_vector_dimension
+            logger.debug(f"Используется сохраненный размер вектора из кэша эмбеддинга: {vector_size}")
+        else:
+            # Если размер не был сохранен (не должно происходить, но на всякий случай)
+            from rag.vector_store import get_embedding_dimension
+            try:
+                vector_size = get_embedding_dimension(embedding)
+                logger.warning(f"Размер вектора не был найден в кэше, определен через пробный запрос: {vector_size}")
+            except Exception as e:
+                logger.error(f"Не удалось определить размер вектора из эмбеддинга: {e}")
+                raise ValueError(
+                    f"Не удалось определить размер вектора эмбеддинга. "
+                    f"Ошибка: {e}"
+                )
+        
         vector_store_manager = self._get_cached_vector_store(
             vdb_url=vdb_url,
             collection_name=qdrant_config.get("collection_name", "scrivener_documents"),
-            vector_size=qdrant_config.get("vector_size", 1024),
+            vector_size=vector_size,  # Используем размер из эмбеддинга
             timeout=qdrant_config.get("timeout", 30),
-            api_key=qdrant_config.get("api_key")
+            api_key=qdrant_config.get("api_key"),
+            embedding=embedding  # Передаем объект эмбеддинга для выполнения пробного запроса перед созданием коллекции
         )
         
         return chunker, embedding, vector_store_manager
@@ -889,52 +938,44 @@ class QdrantService:
                 all_nodes = nodes + table_nodes
 #                all_nodes = nodes
                 
-                # Обрабатываем чанки порциями, чтобы не перегружать API
-                # Размер порции равен batch_size эмбеддера (по умолчанию 10)
-                # Это позволяет избежать проблем с ограничениями API и улучшает производительность
-                batch_size = getattr(embedding, 'batch_size', 10)
-                all_embeddings = []
-                all_points = []
+                # Получаем все тексты для обработки
+                all_texts = [node.text for node in all_nodes]
                 
-                # Обрабатываем узлы порциями
-                for i in range(0, len(all_nodes), batch_size):
-                    batch_nodes = all_nodes[i:i + batch_size]
-                    batch_texts = [node.text for node in batch_nodes]
-                    
-                    try:
-                        batch_embeddings = embedding._get_text_embeddings(batch_texts)
-                    except (RuntimeError, ValueError) as e:
-                        # Ошибка получения токена доступа или неверный формат ответа GigaChat
-                        error_msg = str(e)
-                        logger.error(f"Ошибка при получении эмбеддингов для файла {file_name} (порция {i//batch_size + 1}): {error_msg}")
-                        raise ServiceError(
-                            error="Ошибка получения эмбеддингов",
-                            detail=f"Не удалось получить эмбеддинги для файла {file_name}: {error_msg}",
-                            code="embedding_error"
-                        )
-                    
-                    if len(batch_embeddings) != len(batch_nodes):
-                        error_msg = f"Несоответствие количества эмбеддингов для порции {i//batch_size + 1} файла {file_name}: получено {len(batch_embeddings)}, ожидалось {len(batch_nodes)}"
-                        logger.error(error_msg)
-                        raise ServiceError(
-                            error="Ошибка получения эмбеддингов",
-                            detail=error_msg,
-                            code="embedding_error"
-                        )
-                    
-                    # Формируем точки для текущей порции
-                    for node, emb in zip(batch_nodes, batch_embeddings):
-                        point = PointStruct(
-                            id=str(uuid.uuid4()),
-                            vector=emb,
-                            payload={
-                                "text": node.text,
-                                **node.metadata
-                            }
-                        )
-                        all_points.append(point)
-                    
-                    all_embeddings.extend(batch_embeddings)
+                try:
+                    # Получаем эмбеддинги для всех текстов сразу
+                    # Внутри эмбеддинга тексты обрабатываются последовательно (API не поддерживает батчи)
+                    all_embeddings = embedding._get_text_embeddings(all_texts)
+                except (RuntimeError, ValueError) as e:
+                    # Ошибка получения токена доступа или неверный формат ответа GigaChat
+                    error_msg = str(e)
+                    logger.error(f"Ошибка при получении эмбеддингов для файла {file_name}: {error_msg}")
+                    raise ServiceError(
+                        error="Ошибка получения эмбеддингов",
+                        detail=f"Не удалось получить эмбеддинги для файла {file_name}: {error_msg}",
+                        code="embedding_error"
+                    )
+                
+                if len(all_embeddings) != len(all_nodes):
+                    error_msg = f"Несоответствие количества эмбеддингов для файла {file_name}: получено {len(all_embeddings)}, ожидалось {len(all_nodes)}"
+                    logger.error(error_msg)
+                    raise ServiceError(
+                        error="Ошибка получения эмбеддингов",
+                        detail=error_msg,
+                        code="embedding_error"
+                    )
+                
+                # Формируем точки для всех узлов
+                all_points = []
+                for node, emb in zip(all_nodes, all_embeddings):
+                    point = PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=emb,
+                        payload={
+                            "text": node.text,
+                            **node.metadata
+                        }
+                    )
+                    all_points.append(point)
                 
                 # Сохранение всех точек в Qdrant одной операцией
                 if all_points:
@@ -1125,11 +1166,12 @@ class QdrantService:
             qdrant_config = config.get("qdrant", {})
             
             # Создаем временный менеджер для подключения к Qdrant
+            # Размер вектора не критичен для получения списка коллекций (используем None)
             vector_store_manager = QdrantVectorStoreManager(
                 url=vdb_url,
                 api_key=qdrant_config.get("api_key"),
                 collection_name="temp",  # Временное имя, не используется
-                vector_size=qdrant_config.get("vector_size", 1024),
+                vector_size=None,  # Не используется для получения списка коллекций
                 timeout=qdrant_config.get("timeout", 30)
             )
             
@@ -1252,11 +1294,12 @@ class QdrantService:
             qdrant_config = config.get("qdrant", {})
             
             # Создаем менеджер с указанной коллекцией для удаления
+            # Размер вектора определится из существующей коллекции
             vector_store_manager = QdrantVectorStoreManager(
                 url=vdb_url,
                 api_key=qdrant_config.get("api_key"),
                 collection_name=request.collection_name,
-                vector_size=qdrant_config.get("vector_size", 1024),
+                vector_size=None,  # Размер определится из существующей коллекции
                 timeout=qdrant_config.get("timeout", 30)
             )
             

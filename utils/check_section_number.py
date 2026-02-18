@@ -105,11 +105,13 @@ def find_chunks_by_section_number(
     
     try:
         # Инициализация векторного хранилища
+        # Размер вектора будет определен из существующей коллекции или через пробный запрос
+        # Для операций чтения можно использовать None, размер определится из коллекции
         vector_store_manager = QdrantVectorStoreManager(
             url=vdb_url,
             api_key=qdrant_config.get("api_key"),
             collection_name=collection_name,
-            vector_size=qdrant_config.get("vector_size", 1024),
+            vector_size=None,  # Будет определен из существующей коллекции
             timeout=qdrant_config.get("timeout", 30)
         )
         
@@ -216,11 +218,13 @@ def list_all_section_numbers(
     print("-" * 80)
     
     try:
+        # Размер вектора будет определен из существующей коллекции или через пробный запрос
+        # Для операций чтения можно использовать None, размер определится из коллекции
         vector_store_manager = QdrantVectorStoreManager(
             url=vdb_url,
             api_key=qdrant_config.get("api_key"),
             collection_name=collection_name,
-            vector_size=qdrant_config.get("vector_size", 1024),
+            vector_size=None,  # Будет определен из существующей коллекции
             timeout=qdrant_config.get("timeout", 30)
         )
         

@@ -260,17 +260,19 @@ class RetrievalTool(BaseTool):
         
         # Инициализация векторного хранилища (кэшируется по vdb_url)
         # Используем адаптер для абстракции от конкретной БД
-        vector_store_manager = self._get_vector_store_manager(vdb_url)
+        # Передаем объект эмбеддинга для определения размера вектора перед созданием коллекции
+        vector_store_manager = self._get_vector_store_manager(vdb_url, embedding=embedding)
         
         return embedding, vector_store_manager
     
-    def _get_vector_store_manager(self, vdb_url: str):
+    def _get_vector_store_manager(self, vdb_url: str, embedding = None):
         """
         Получение или создание менеджера векторного хранилища с кэшированием.
         Использует адаптер для абстракции от конкретной БД.
         
         Args:
             vdb_url: URL векторной БД
+            embedding: Опциональный объект эмбеддинга для определения размера вектора
         
         Returns:
             Менеджер векторного хранилища (QdrantVectorStoreManager для совместимости с DocumentRetriever)
@@ -314,7 +316,27 @@ class RetrievalTool(BaseTool):
         if not normalized_url.startswith("http"):
             normalized_url = f"http://{normalized_url}"
         
-        vector_store_cache_key = f"{normalized_url}:{vector_store_config.get('collection_name', 'scrivener_documents')}:{vector_store_config.get('vector_size', 1024)}"
+        # Используем сохраненный размер вектора из объекта эмбеддинга (определен при создании/получении из кэша)
+        if not embedding:
+            raise ValueError("Объект эмбеддинга обязателен для определения размера вектора")
+        
+        if hasattr(embedding, '_cached_vector_dimension') and embedding._cached_vector_dimension is not None:
+            vector_size = embedding._cached_vector_dimension
+            logger.debug(f"Используется сохраненный размер вектора из кэша эмбеддинга: {vector_size}")
+        else:
+            # Если размер не был сохранен, определяем через пробный запрос (он сохранит результат)
+            from rag.vector_store import get_embedding_dimension
+            try:
+                vector_size = get_embedding_dimension(embedding)
+                logger.debug(f"Размер вектора определен через пробный запрос и сохранен: {vector_size}")
+            except Exception as e:
+                logger.error(f"Не удалось определить размер вектора из эмбеддинга: {e}")
+                raise ValueError(
+                    f"Не удалось определить размер вектора эмбеддинга через пробный запрос к API. "
+                    f"Ошибка: {e}"
+                )
+        
+        vector_store_cache_key = f"{normalized_url}:{vector_store_config.get('collection_name', 'scrivener_documents')}:{vector_size}"
         
         if vector_store_cache_key not in RetrievalTool._vector_store_cache:
             # Создаем QdrantVectorStoreManager (для совместимости с DocumentRetriever)
@@ -323,12 +345,13 @@ class RetrievalTool(BaseTool):
                 url=normalized_url,
                 api_key=vector_store_config.get("api_key"),
                 collection_name=vector_store_config.get("collection_name", "scrivener_documents"),
-                vector_size=vector_store_config.get("vector_size", 1024),
+                vector_size=vector_size,  # Используем размер из эмбеддинга
                 timeout=vector_store_config.get("timeout", 30)
             )
             
             # Убеждаемся, что коллекция существует
-            vector_store_manager.ensure_collection_exists()
+            # Передаем объект эмбеддинга для выполнения пробного запроса перед созданием коллекции
+            vector_store_manager.ensure_collection_exists(embedding=embedding)
             
             RetrievalTool._vector_store_cache[vector_store_cache_key] = vector_store_manager
             logger.debug(f"Создан новый менеджер векторного хранилища для {normalized_url} (кэширован)")

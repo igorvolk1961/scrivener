@@ -89,7 +89,8 @@ class RAGPipeline:
         )
         
         # Создание коллекции, если не существует
-        self.vector_store_manager.ensure_collection_exists()
+        # Передаем объект эмбеддинга для выполнения пробного запроса перед созданием коллекции
+        self.vector_store_manager.ensure_collection_exists(embedding=self.embedding)
         
         # Инициализация индексера и ретривера
         rag_config = self.config.get("rag", {})

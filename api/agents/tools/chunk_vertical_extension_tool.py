@@ -356,17 +356,24 @@ class ChunkVerticalExtensionTool(BaseTool):
                     max_retries=embeddings_config.get("max_retries", 3),
                     timeout=embeddings_config.get("timeout", 60)
                 )
-                from rag.vector_store import get_embedding_dimension
-                vector_size = get_embedding_dimension(embedding)
-                logger.debug(f"Размер вектора получен из embedding объекта: {vector_size}")
+                # Используем сохраненный размер вектора из объекта эмбеддинга, если он есть
+                if hasattr(embedding, '_cached_vector_dimension') and embedding._cached_vector_dimension is not None:
+                    vector_size = embedding._cached_vector_dimension
+                    logger.debug(f"Используется сохраненный размер вектора из кэша эмбеддинга: {vector_size}")
+                else:
+                    # Если размер не был сохранен, определяем через пробный запрос (он сохранит результат)
+                    from rag.vector_store import get_embedding_dimension
+                    vector_size = get_embedding_dimension(embedding)
+                    logger.debug(f"Размер вектора определен через пробный запрос и сохранен: {vector_size}")
                 return vector_size
         except Exception as e:
             logger.warning(f"Не удалось получить размер из embedding объекта: {e}")
         
-        # Fallback на конфиг
-        vector_size = qdrant_config.get("vector_size", 1024)
-        logger.warning(f"Используется размер вектора из конфига (fallback): {vector_size}")
-        return vector_size
+        # Не удалось определить размер вектора - выбрасываем ошибку
+        raise ValueError(
+            f"Не удалось определить размер вектора эмбеддинга. "
+            f"Необходимо выполнить пробный запрос к API для определения размера."
+        )
     
     def _get_cached_config(self):
         """Получение конфигурации с кэшированием."""
@@ -374,6 +381,35 @@ class ChunkVerticalExtensionTool(BaseTool):
             from utils.config import get_config
             ChunkVerticalExtensionTool._config_cache = get_config()
         return ChunkVerticalExtensionTool._config_cache
+    
+    def _get_embedding_object(self):
+        """
+        Создание объекта эмбеддинга для определения размера вектора.
+        
+        Returns:
+            Объект эмбеддинга или None, если не удалось создать
+        """
+        try:
+            from rag.giga_embeddings import GigaEmbedding
+            import os
+            
+            credentials = os.getenv("GIGACHAT_AUTH_KEY")
+            if credentials:
+                embeddings_config = self._get_cached_config().get("embeddings", {}).get("giga", {})
+                embedding = GigaEmbedding(
+                    credentials=credentials,
+                    scope=embeddings_config.get("scope", "GIGACHAT_API_PERS"),
+                    api_url=embeddings_config.get("api_url", "https://gigachat.devices.sberbank.ru/api/v1"),
+                    model=embeddings_config.get("model", "Embeddings"),
+                    batch_size=embeddings_config.get("batch_size", 10),
+                    max_retries=embeddings_config.get("max_retries", 3),
+                    timeout=embeddings_config.get("timeout", 60)
+                )
+                return embedding
+        except Exception as e:
+            logger.debug(f"Не удалось создать объект эмбеддинга: {e}")
+        
+        return None
     
     def _get_vector_store_manager(self, vdb_url: str):
         """Получение или создание адаптера векторного хранилища с кэшированием."""
@@ -411,6 +447,9 @@ class ChunkVerticalExtensionTool(BaseTool):
         # Получаем размер вектора из embedding объекта или из существующей коллекции
         vector_size = self._get_vector_size(normalized_url, qdrant_config)
         
+        # Создаем объект эмбеддинга для передачи в ensure_collection_exists
+        embedding = self._get_embedding_object()
+        
         vector_store_cache_key = f"{normalized_url}:{qdrant_config.get('collection_name', 'scrivener_documents')}:{vector_size}"
         
         if vector_store_cache_key not in ChunkVerticalExtensionTool._vector_store_cache:
@@ -423,7 +462,8 @@ class ChunkVerticalExtensionTool(BaseTool):
                 timeout=qdrant_config.get("timeout", 30)
             )
             
-            vector_store_manager.ensure_collection_exists()
+            # Передаем объект эмбеддинга для выполнения пробного запроса перед созданием коллекции
+            vector_store_manager.ensure_collection_exists(embedding=embedding)
             
             # Создаем адаптер
             adapter = QdrantAdapter(vector_store_manager)

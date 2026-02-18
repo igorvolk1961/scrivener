@@ -21,7 +21,8 @@ class GigaEmbedding(BaseEmbedding):
     
     Поддерживает батчинг, retry логику и таймауты.
     GigaEmbeddings - модель от Сбера для работы с русским языком.
-    Размер эмбеддинга: 2560 (по умолчанию для EmbeddingsGigaR).
+    
+    Размер эмбеддинга определяется динамически через пробный запрос к API.
     """
     
     def __init__(
@@ -33,6 +34,7 @@ class GigaEmbedding(BaseEmbedding):
         batch_size: int = 10,
         max_retries: int = 3,
         timeout: int = 60,
+        max_concurrent: Optional[int] = None,
         **kwargs
     ):
         """
@@ -42,15 +44,20 @@ class GigaEmbedding(BaseEmbedding):
             credentials: Base64-encoded Authorization Key в формате base64(client_id:client_secret)
             scope: Область доступа (GIGACHAT_API_PERS для персонального API)
             api_url: URL API GigaChat
-            model: Название модели (обычно "Embeddings" для эмбеддингов)
-            batch_size: Размер батча для обработки текстов
+            model: Название модели эмбеддингов
+            batch_size: Устаревший параметр (оставлен для совместимости, не используется)
             max_retries: Максимальное количество попыток при ошибке
             timeout: Таймаут запроса в секундах
-        """
-        # GigaEmbeddings имеет размер 2560
-        embedding_dim = 2560
+            max_concurrent: Максимальное количество параллельных запросов для асинхронной обработки (None = без ограничений)
         
-        # Передаем размер эмбеддинга в базовый класс
+        Примечание: Размер вектора определяется динамически через пробный запрос к API.
+        Не используйте жестко заданные значения размера вектора.
+        """
+        # Размер вектора будет определен динамически через пробный запрос к API
+        # Используем None как временное значение, реальный размер определится при первом запросе
+        embedding_dim = None
+        
+        # Передаем размер эмбеддинга в базовый класс (может быть None, будет определен позже)
         super().__init__(model_name=model, embed_dim=embedding_dim, **kwargs)
         
         # Используем object.__setattr__ для установки атрибутов
@@ -58,10 +65,12 @@ class GigaEmbedding(BaseEmbedding):
         object.__setattr__(self, 'scope', scope)
         object.__setattr__(self, 'api_url', api_url.rstrip('/'))
         object.__setattr__(self, 'model', model)
-        object.__setattr__(self, 'batch_size', batch_size)
+        object.__setattr__(self, 'batch_size', batch_size)  # Устаревший параметр, оставлен для совместимости
         object.__setattr__(self, 'max_retries', max_retries)
         object.__setattr__(self, 'timeout', timeout)
-        object.__setattr__(self, 'embedding_dim', embedding_dim)
+        # Размер вектора будет определен динамически через пробный запрос
+        object.__setattr__(self, 'embedding_dim', None)
+        object.__setattr__(self, 'max_concurrent', max_concurrent)
         object.__setattr__(self, 'access_token', None)
         object.__setattr__(self, 'token_obtained_at', None)  # Время получения токена
         object.__setattr__(self, 'max_json_payload_size', 0)  # Максимальный размер JSON payload, успешно обработанный
@@ -69,7 +78,7 @@ class GigaEmbedding(BaseEmbedding):
         
         logger.info(
             f"GigaEmbedding инициализирован: model={model}, "
-            f"api_url={api_url}, batch_size={batch_size}, embedding_dim={self.embedding_dim}"
+            f"api_url={api_url}, max_concurrent={max_concurrent}"
         )
         
         # Получаем токен доступа при инициализации
@@ -254,7 +263,10 @@ class GigaEmbedding(BaseEmbedding):
     
     async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Асинхронное получение эмбеддингов для списка текстов с батчингом.
+        Асинхронное получение эмбеддингов для списка текстов.
+        
+        Примечание: GigaChat API не поддерживает батчинг на стороне сервера,
+        поэтому тексты обрабатываются параллельно, каждый текст требует отдельного HTTP запроса.
         
         Args:
             texts: Список текстов для обработки
@@ -265,60 +277,137 @@ class GigaEmbedding(BaseEmbedding):
         if not texts:
             return []
         
-        all_embeddings = []
-        
-        # Обрабатываем тексты батчами
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i:i + self.batch_size]
-            batch_embeddings = await self._aget_batch_embeddings(batch)
-            all_embeddings.extend(batch_embeddings)
-        
-        return all_embeddings
+        # Обрабатываем все тексты параллельно
+        return await self._aget_batch_embeddings(texts)
     
     async def _aget_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Асинхронное получение эмбеддингов для батча текстов с retry логикой.
+        Асинхронное получение эмбеддингов для списка текстов с retry логикой.
+        
+        Примечание: GigaChat API не поддерживает батчинг на стороне сервера,
+        поэтому тексты обрабатываются параллельно, каждый текст требует отдельного HTTP запроса.
+        Используется semaphore для ограничения количества параллельных запросов (если указано max_concurrent).
         
         Args:
-            texts: Список текстов в батче
+            texts: Список текстов для обработки
         
         Returns:
             Список эмбеддингов
         """
+        if not texts:
+            return []
+        
+        # Создаем semaphore для ограничения параллелизма, если указано max_concurrent
+        semaphore = None
+        if self.max_concurrent is not None and self.max_concurrent > 0:
+            semaphore = asyncio.Semaphore(self.max_concurrent)
+        
+        async def _process_with_semaphore(text: str, attempt: int) -> List[float]:
+            """Обработка одного текста с учетом semaphore."""
+            if semaphore:
+                async with semaphore:
+                    return await self._aget_single_embedding_with_retry(text)
+            else:
+                return await self._aget_single_embedding_with_retry(text)
+        
+        # Обрабатываем все тексты параллельно
+        tasks = [_process_with_semaphore(text, 0) for text in texts]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        embeddings = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Ошибка при получении эмбеддинга для текста {i}: {result}")
+                raise result  # Пробрасываем исключение дальше
+            if result:
+                embeddings.append(result)
+            else:
+                # Это не должно произойти, так как _aget_single_embedding_with_retry выбрасывает исключения
+                error_msg = f"Не удалось получить эмбеддинг для текста {i}: метод вернул None"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+        
+        return embeddings
+    
+    async def _aget_single_embedding_with_retry(self, text: str) -> List[float]:
+        """
+        Получение эмбеддинга для одного текста с retry логикой.
+        
+        Args:
+            text: Текст для обработки
+        
+        Returns:
+            Эмбеддинг
+        
+        Raises:
+            RuntimeError: При ошибках получения токена или превышении размера запроса
+            ValueError: При неверном формате ответа API
+        """
         for attempt in range(self.max_retries):
             try:
-                embeddings = []
-                
-                # Обрабатываем тексты параллельно
-                tasks = [self._aget_single_embedding(text, attempt) for text in texts]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        logger.error(f"Ошибка при получении эмбеддинга для текста {i}: {result}")
-                        raise result  # Пробрасываем исключение дальше
-                    if result:
-                        embeddings.append(result)
-                    else:
-                        # Это не должно произойти, так как _aget_single_embedding теперь выбрасывает исключения
-                        error_msg = f"Не удалось получить эмбеддинг для текста {i}: метод вернул None"
-                        logger.error(error_msg)
-                        raise RuntimeError(error_msg)
-                
-                return embeddings
-                
-            except Exception as e:
+                embedding = await self._aget_single_embedding(text, attempt)
+                if embedding:
+                    return embedding
+                else:
+                    error_msg = "Не удалось получить эмбеддинг для текста: метод вернул None"
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
+            except (RuntimeError, ValueError) as e:
+                # Ошибки получения токена или неверный формат - пробрасываем дальше без retry
+                logger.error(f"Ошибка при получении эмбеддинга: {e}")
+                raise
+            except httpx.TimeoutException as e:
                 logger.warning(
-                    f"Ошибка при получении эмбеддингов (попытка {attempt + 1}/{self.max_retries}): {e}"
+                    f"Таймаут при получении эмбеддинга (попытка {attempt + 1}/{self.max_retries}): {e}"
                 )
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(2 ** attempt)  # Экспоненциальная задержка
                     continue
                 else:
-                    logger.error("Превышено максимальное количество попыток")
+                    logger.error("Превышено максимальное количество попыток при таймауте")
+                    raise
+            except httpx.HTTPStatusError as e:
+                # Если токен истек, пытаемся обновить его
+                if e.response.status_code == 401:
+                    logger.warning("Токен доступа истек (401), обновляем...")
+                    object.__setattr__(self, 'access_token', None)
+                    object.__setattr__(self, 'token_obtained_at', None)
+                    try:
+                        token = self._get_access_token()
+                        if not token:
+                            error_msg = "Не удалось получить новый токен доступа после истечения старого"
+                            logger.error(error_msg)
+                            raise RuntimeError(error_msg)
+                        if attempt < self.max_retries - 1:
+                            continue  # Повторяем попытку с новым токеном
+                    except (RuntimeError, ValueError):
+                        # Ошибка получения нового токена - пробрасываем дальше
+                        raise
+                
+                logger.warning(
+                    f"HTTP ошибка при получении эмбеддинга (попытка {attempt + 1}/{self.max_retries}): {e}"
+                )
+                if attempt < self.max_retries - 1 and e.response.status_code >= 500:
+                    # Retry только для серверных ошибок
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                else:
+                    logger.error(f"HTTP ошибка: {e.response.status_code}")
+                    raise
+            except Exception as e:
+                logger.error(
+                    f"Неожиданная ошибка при получении эмбеддинга (попытка {attempt + 1}/{self.max_retries}): {e}",
+                    exc_info=True
+                )
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                else:
                     raise
         
-        return []
+        error_msg = "Не удалось получить эмбеддинг после всех попыток"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
     
     async def _aget_single_embedding(self, text: str, attempt: int = 0) -> Optional[List[float]]:
         """
@@ -411,7 +500,10 @@ class GigaEmbedding(BaseEmbedding):
     
     def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Получение эмбеддингов для списка текстов с батчингом.
+        Получение эмбеддингов для списка текстов.
+        
+        Примечание: GigaChat API не поддерживает батчинг на стороне сервера,
+        поэтому тексты обрабатываются последовательно.
         
         Args:
             texts: Список текстов для обработки
@@ -422,104 +514,95 @@ class GigaEmbedding(BaseEmbedding):
         if not texts:
             return []
         
-        all_embeddings = []
-        
-        # Обрабатываем тексты батчами
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i:i + self.batch_size]
-            batch_embeddings = self._get_batch_embeddings(batch)
-            all_embeddings.extend(batch_embeddings)
-        
-        return all_embeddings
+        # Обрабатываем все тексты последовательно (API не поддерживает батчи)
+        return self._get_batch_embeddings(texts)
     
     def _get_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Получение эмбеддингов для батча текстов с retry логикой.
+        Получение эмбеддингов для списка текстов с retry логикой.
+        
+        Примечание: GigaChat API не поддерживает батчинг на стороне сервера,
+        поэтому тексты обрабатываются последовательно, каждый текст требует отдельного HTTP запроса.
         
         Args:
-            texts: Список текстов в батче
+            texts: Список текстов для обработки
         
         Returns:
             Список эмбеддингов
         """
-        for attempt in range(self.max_retries):
-            try:
-                embeddings = []
-                
-                # Обрабатываем тексты последовательно (GigaChat может иметь ограничения)
-                for text in texts:
-                    try:
-                        embedding = self._get_single_embedding(text, attempt)
-                        if embedding:
-                            embeddings.append(embedding)
-                        else:
-                            # Это не должно произойти, так как _get_single_embedding теперь выбрасывает исключения
-                            error_msg = "Не удалось получить эмбеддинг для текста: метод вернул None"
-                            logger.error(error_msg)
-                            raise RuntimeError(error_msg)
-                    except (RuntimeError, ValueError) as e:
-                        # Все ошибки пробрасываем дальше - не скрываем их!
-                        logger.error(f"Ошибка при получении эмбеддинга: {e}")
-                        raise
-                
-                return embeddings
-                
-            except (RuntimeError, ValueError):
-                # Ошибка получения токена доступа или неверный формат ответа - пробрасываем дальше без retry
-                raise
-            except httpx.TimeoutException as e:
-                logger.warning(
-                    f"Таймаут при получении эмбеддингов (попытка {attempt + 1}/{self.max_retries}): {e}"
-                )
-                if attempt < self.max_retries - 1:
-                    time.sleep(2 ** attempt)  # Экспоненциальная задержка
-                    continue
-                else:
-                    logger.error("Превышено максимальное количество попыток при таймауте")
-                    raise
-            
-            except httpx.HTTPStatusError as e:
-                # Если токен истек, пытаемся обновить его
-                if e.response.status_code == 401:
-                    logger.warning("Токен доступа истек (401), обновляем...")
-                    object.__setattr__(self, 'access_token', None)
-                    object.__setattr__(self, 'token_obtained_at', None)
-                    try:
-                        token = self._get_access_token()
-                        if not token:
-                            # Это не должно произойти, так как _get_access_token теперь выбрасывает исключения
-                            error_msg = "Не удалось получить новый токен доступа после истечения старого"
-                            logger.error(error_msg)
-                            raise RuntimeError(error_msg)
-                        if attempt < self.max_retries - 1:
-                            continue  # Повторяем попытку с новым токеном
-                    except (RuntimeError, ValueError):
-                        # Ошибка получения нового токена - пробрасываем дальше
-                        raise
-                
-                logger.warning(
-                    f"HTTP ошибка при получении эмбеддингов (попытка {attempt + 1}/{self.max_retries}): {e}"
-                )
-                if attempt < self.max_retries - 1 and e.response.status_code >= 500:
-                    # Retry только для серверных ошибок
-                    time.sleep(2 ** attempt)
-                    continue
-                else:
-                    logger.error(f"HTTP ошибка: {e.response.status_code}")
-                    raise
-            
-            except Exception as e:
-                logger.error(
-                    f"Неожиданная ошибка при получении эмбеддингов (попытка {attempt + 1}/{self.max_retries}): {e}",
-                    exc_info=True
-                )
-                if attempt < self.max_retries - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                else:
-                    raise
+        if not texts:
+            return []
         
-        return []
+        embeddings = []
+        
+        # Обрабатываем тексты последовательно (API не поддерживает батчи)
+        for text in texts:
+            for attempt in range(self.max_retries):
+                try:
+                    embedding = self._get_single_embedding(text, attempt)
+                    if embedding:
+                        embeddings.append(embedding)
+                        break  # Успешно обработали, переходим к следующему тексту
+                    else:
+                        # Это не должно произойти, так как _get_single_embedding теперь выбрасывает исключения
+                        error_msg = "Не удалось получить эмбеддинг для текста: метод вернул None"
+                        logger.error(error_msg)
+                        raise RuntimeError(error_msg)
+                except (RuntimeError, ValueError) as e:
+                    # Ошибки получения токена или неверный формат - пробрасываем дальше без retry
+                    logger.error(f"Ошибка при получении эмбеддинга для текста: {e}")
+                    raise
+                except httpx.TimeoutException as e:
+                    logger.warning(
+                        f"Таймаут при получении эмбеддинга (попытка {attempt + 1}/{self.max_retries}): {e}"
+                    )
+                    if attempt < self.max_retries - 1:
+                        time.sleep(2 ** attempt)  # Экспоненциальная задержка
+                        continue
+                    else:
+                        logger.error("Превышено максимальное количество попыток при таймауте")
+                        raise
+                except httpx.HTTPStatusError as e:
+                    # Если токен истек, пытаемся обновить его
+                    if e.response.status_code == 401:
+                        logger.warning("Токен доступа истек (401), обновляем...")
+                        object.__setattr__(self, 'access_token', None)
+                        object.__setattr__(self, 'token_obtained_at', None)
+                        try:
+                            token = self._get_access_token()
+                            if not token:
+                                error_msg = "Не удалось получить новый токен доступа после истечения старого"
+                                logger.error(error_msg)
+                                raise RuntimeError(error_msg)
+                            if attempt < self.max_retries - 1:
+                                continue  # Повторяем попытку с новым токеном
+                        except (RuntimeError, ValueError):
+                            # Ошибка получения нового токена - пробрасываем дальше
+                            raise
+                    
+                    logger.warning(
+                        f"HTTP ошибка при получении эмбеддинга (попытка {attempt + 1}/{self.max_retries}): {e}"
+                    )
+                    if attempt < self.max_retries - 1 and e.response.status_code >= 500:
+                        # Retry только для серверных ошибок
+                        time.sleep(2 ** attempt)
+                        continue
+                    else:
+                        logger.error(f"HTTP ошибка: {e.response.status_code}")
+                        raise
+                except Exception as e:
+                    logger.error(
+                        f"Неожиданная ошибка при получении эмбеддинга (попытка {attempt + 1}/{self.max_retries}): {e}",
+                        exc_info=True
+                    )
+                    if attempt < self.max_retries - 1:
+                        time.sleep(2 ** attempt)
+                        continue
+                    else:
+                        raise
+        
+        return embeddings
+                
     
     def _get_single_embedding(self, text: str, attempt: int = 0) -> Optional[List[float]]:
         """

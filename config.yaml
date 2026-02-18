@@ -4,7 +4,7 @@ qdrant:
   executable_path: "d:/programs/qdrant/qdrant.exe"
   config_path: "f:/programs/qdrant/qdrant_config.yaml"
   collection_name: "scrivener_documents"
-  vector_size: 2560  # Размер эмбеддинга (EmbeddingsGigaR)
+  # Размер вектора определяется автоматически из эмбеддинга при создании коллекции
   url: "http://localhost:6333"  # Qdrant API URL
   timeout: 30
 
@@ -37,7 +37,7 @@ rag:
     enabled: true               # Включить реранкинг
     use_qdrant_builtin: true    # Использовать встроенный реранкер Qdrant (по умолчанию)
     # Если use_qdrant_builtin: false, используются параметры внешнего реранкера ниже
-    model: "dengcao/Qwen3-Reranker-0.6B:F16"  # Модель внешнего реранкера (Ollama)
+    model: "dengcao/Qwen3-Reranker-0.6B:F16"  # Модель внешнего реранкера
     api_url: "http://localhost:11434"  # URL внешнего API (использует OpenAI-совместимый /v1/chat/completions)
     max_retries: 3              # Максимальное количество попыток (для внешнего реранкера)
     timeout: 60                 # Таймаут запроса в секундах (для внешнего реранкера)

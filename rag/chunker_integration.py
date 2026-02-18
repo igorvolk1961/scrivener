@@ -406,16 +406,6 @@ class ChunkerIntegration:
                 if not text or not text.strip():
                     return None
                 
-                # Отладочное логирование: выводим все ключи из chunk_data для первых нескольких чанков
-                if index < 3:
-                    logger.info(f"Чанк {index}: доступные ключи в chunk_data: {list(chunk_data.keys())}")
-                    # Выводим структуру без текста (может быть длинным)
-                    chunk_preview = {k: v for k, v in chunk_data.items() if k != "text" and k != "content"}
-                    logger.info(f"Чанк {index}: chunk_data (без text/content): {chunk_preview}")
-                    # Проверяем, есть ли вложенная структура metadata
-                    if "metadata" in chunk_data:
-                        logger.info(f"Чанк {index}: chunk_data['metadata'] = {chunk_data.get('metadata')}")
-                
                 # Извлечение метаданных о разделах из чанкера
                 # Сначала проверяем, есть ли вложенная структура metadata
                 chunk_metadata = chunk_data.get("metadata", {})
