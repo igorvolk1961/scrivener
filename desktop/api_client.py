@@ -22,7 +22,8 @@ class ScrivenerClient:
         """
         self.api_url = api_url.rstrip("/")
         self.cfx_emulator_url = cfx_emulator_url.rstrip("/")
-        self.timeout = 300.0  # 5 минут для длительных операций
+        # Таймаут ожидания ответа от API (generate, RAG и т.д.) — 5 минут
+        self.timeout = 10 * 60.0  # 600 секунд
     
     def _make_request(
         self,

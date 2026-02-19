@@ -29,6 +29,8 @@ class FinalRAGAnswerTool(BaseTool):
     Usage: Call after you are ready to finalize your work and provide the final answer to the user.
     
     For knowledge base queries: Always specify knowledge_base_coverage and knowledge_base_sources.
+    Sources: numbered list (1, 2, 3...) with document name only; no duplicate documents.
+    Citations in answer: [source_number](section_number_if_present), e.g. [1], [2](2.1), [2](3.4).
     """
 
     reasoning: str = Field(description="Why task is now complete and how answer was verified")
@@ -37,7 +39,9 @@ class FinalRAGAnswerTool(BaseTool):
     )
     answer: str = Field(
         description="Comprehensive final answer with EXACT factual details (dates, numbers, names). "
-                    "For knowledge base queries: answer must contain ONLY information from the knowledge base."
+                    "For knowledge base queries: answer must contain ONLY information from the knowledge base. "
+                    "Cite as [source_number](section_number_if_present): source_number is the document position in knowledge_base_sources (if 1 document, use [1] only; never [2],[3] for same document). "
+                    "In parentheses add section number from chunk metadata (e.g. [1](2.1), [1](3.4)) when the fact is from a specific section."
     )
     status: Literal[AgentStatesEnum.COMPLETED, AgentStatesEnum.FAILED] = Field(description="Task completion status")
     knowledge_base_coverage: Literal["full", "partial", "none"] = Field(
@@ -47,19 +51,25 @@ class FinalRAGAnswerTool(BaseTool):
     )
     knowledge_base_sources: list[str] = Field(
         default_factory=list,
-        description="Список источников из базы знаний, использованных для ответа (формат: 'file_name (IRV ID: irv_id)'). "
-                    "Обязательно указывай для ответов из базы знаний."
+        description="Список источников из базы знаний: только номер и название документа (без повторений). "
+                    "Формат каждого элемента: «N. название_документа» или «название_документа»; порядок 1, 2, 3... соответствует номерам в ссылках в тексте ответа. "
+                    "Один документ — одна строка в списке. Обязательно для ответов из базы знаний."
     )
 
     async def __call__(self, context: AgentContext, config: AgentConfig, **_) -> str:
         context.state = self.status
-        context.execution_result = self.answer
+        
+        # Формируем полный ответ с источниками
+        full_answer = self.answer + "\nИсточники информации:\n" + "\n".join(self.knowledge_base_sources)
+        
+        # execution_result используется в base_agent.execute() как возвращаемое значение
+        # поэтому должен содержать полный текст с источниками
+        context.execution_result = full_answer
         
         # Формируем структурированный ответ
         result = {
             "knowledge_base_coverage": self.knowledge_base_coverage,
-            "answer": self.answer,
-            "sources": self.knowledge_base_sources,
+            "answer": full_answer,
             "status": self.status.value,
             "reasoning": self.reasoning,
             "completed_steps": self.completed_steps
