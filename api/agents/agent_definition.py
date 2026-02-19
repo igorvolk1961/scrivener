@@ -30,9 +30,13 @@ class LLMConfig(BaseModel, extra="allow"):
     proxy: str | None = Field(
         default=None, description="Proxy URL (e.g., socks5://127.0.0.1:1081 or http://127.0.0.1:8080)"
     )
+    auth_module: str | None = Field(
+        default=None,
+        description="Optional Python module path for custom authentication provider (e.g., 'api.agents.auth.gigachat_auth')"
+    )
 
     def to_openai_client_kwargs(self) -> dict[str, Any]:
-        return self.model_dump(exclude={"api_key", "base_url", "proxy"})
+        return self.model_dump(exclude={"api_key", "base_url", "proxy", "auth_module"})
 
 
 class SearchConfig(BaseModel, extra="allow"):

@@ -3,6 +3,7 @@ Agent Factory для динамического создания агентов 
 Адаптировано из sgr-agent-core.
 """
 
+import importlib
 import logging
 from typing import Type, TypeVar
 
@@ -26,6 +27,45 @@ class AgentFactory:
     """
 
     @classmethod
+    def _load_auth_provider(cls, auth_module: str):
+        """Загружает провайдер авторизации из указанного модуля.
+        
+        Args:
+            auth_module: Путь к модулю (например, 'api.agents.auth.gigachat_auth')
+            
+        Returns:
+            Экземпляр провайдера авторизации
+            
+        Raises:
+            ImportError: Если модуль или класс не найден
+            AttributeError: Если класс провайдера не найден в модуле
+        """
+        # Определяем имя класса провайдера
+        # Если указан полный путь с классом (например, 'api.agents.auth.gigachat_auth.GigaChatAuthProvider'),
+        # используем его; иначе пытаемся найти класс по имени модуля
+        if '.' in auth_module and auth_module.count('.') > 1:
+            parts = auth_module.rsplit('.', 1)
+            module_path = parts[0]
+            class_name = parts[1]
+        else:
+            module_path = auth_module
+            # Пытаемся определить имя класса из имени модуля
+            # Например, 'gigachat_auth' -> 'GigaChatAuthProvider'
+            module_name = module_path.split('.')[-1]
+            class_name = ''.join(word.capitalize() for word in module_name.split('_')) + 'AuthProvider'
+        
+        try:
+            module = importlib.import_module(module_path)
+            provider_class = getattr(module, class_name)
+            return provider_class()
+        except ImportError as e:
+            logger.error(f"Не удалось импортировать модуль '{module_path}': {e}")
+            raise
+        except AttributeError as e:
+            logger.error(f"Класс '{class_name}' не найден в модуле '{module_path}': {e}")
+            raise
+
+    @classmethod
     def _create_client(cls, llm_config: LLMConfig) -> AsyncOpenAI:
         """Create OpenAI client from configuration.
 
@@ -39,6 +79,30 @@ class AgentFactory:
         if llm_config.proxy:
             client_kwargs["http_client"] = httpx.AsyncClient(proxy=llm_config.proxy)
 
+        # Если указан auth_module, загружаем провайдер и применяем его настройки
+        if llm_config.auth_module:
+            try:
+                provider = cls._load_auth_provider(llm_config.auth_module)
+                
+                # Получаем дополнительные параметры для client_kwargs (например, project для YandexGPT)
+                if hasattr(provider, 'get_client_kwargs'):
+                    extra_kwargs = provider.get_client_kwargs(llm_config)
+                    if extra_kwargs:
+                        client_kwargs.update(extra_kwargs)
+                
+                # Создаем клиент
+                client = AsyncOpenAI(**client_kwargs)
+                
+                # Если провайдер требует wrapper для динамических заголовков (например, GigaChat)
+                if hasattr(provider, 'wrap_client'):
+                    client = provider.wrap_client(client, llm_config)
+                
+                return client
+            except Exception as e:
+                logger.error(f"Ошибка при загрузке auth provider '{llm_config.auth_module}': {e}", exc_info=True)
+                raise ValueError(f"Failed to load auth provider '{llm_config.auth_module}': {e}") from e
+
+        # Стандартная логика без изменений
         return AsyncOpenAI(**client_kwargs)
 
     @classmethod
