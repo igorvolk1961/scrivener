@@ -85,11 +85,9 @@ class QueryParaphraseTool(BaseTool):
             if "{queryRefinementCount}" in system_prompt:
                 system_prompt = system_prompt.replace("{queryRefinementCount}", str(queryRefinementCount))
 
-            # Создаем клиент LLM
-            openai_client = AsyncOpenAI(
-                api_key=config.llm.api_key,
-                base_url=config.llm.base_url,
-            )
+            # Создаем клиент LLM через AgentFactory для поддержки кастомных провайдеров авторизации
+            from api.agents.agent_factory import AgentFactory
+            openai_client = AgentFactory.create_client(config.llm)
             
             # Вызываем LLM для перефразирования запроса
             response = await openai_client.chat.completions.create(

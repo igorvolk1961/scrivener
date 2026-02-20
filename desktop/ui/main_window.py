@@ -145,7 +145,7 @@ class MainWindow:
             "llm_api_key": llm_config.get("api_key", ""),
             "llm_url": llm_config.get("url", ""),
             "llm_model_name": llm_config.get("model", "gpt-4o-mini"),
-            "llm_auth_type": "0",
+            "llm_auth_type": llm_config.get("llm_auth_type", 0),
             "internet": self.internet_var.get(),
             "knowledge_base": self.knowledge_base_var.get(),
         }

@@ -1,0 +1,26 @@
+{
+  "api_url": "http://localhost:8000",
+  "cfx_emulator_url": "http://localhost:8001",
+  "llm": {
+
+    "url": "https://gigachat.devices.sberbank.ru/api/v1",
+    "api_key": "M2RjNGFkZGEtOTA0MS00MzI0LTlmNzUtNzczNTIxNmQ0Zjk1OmFmNzE0NWQ3LWY5NDQtNGExNC05ZmZmLWEzYjE3Zjk5MjgwYw==",
+    "model": "GigaChat-2-Max",
+
+    "temperature": 0.2,
+    "max_tokens": 8000,
+    "system_prompt": "Ты ИИ-помощник должностного лица (ДЛ). \n{userPost}\nОтвечай на русском языке в формате JSON. Поля ответа:\n- reasoning: список строк, содержащий шаги твоих размышлений\n- answer: строка с твоим ответом"
+  },
+  "embeddings": {
+    "api_key": "M2RjNGFkZGEtOTA0MS00MzI0LTlmNzUtNzczNTIxNmQ0Zjk1OmFmNzE0NWQ3LWY5NDQtNGExNC05ZmZmLWEzYjE3Zjk5MjgwYw==",
+    "url": "https://gigachat.devices.sberbank.ru/api/v1",
+    "model": "Embeddings"
+  },
+  "qdrant": {
+    "url": "http://localhost:6333"
+  },
+  "search": {
+    "api_key": "",
+    "url": "https://api.tavily.com"
+  }
+}

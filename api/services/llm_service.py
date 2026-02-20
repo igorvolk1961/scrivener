@@ -8,7 +8,7 @@ from typing import Dict, Optional, Any
 from functools import lru_cache
 from loguru import logger
 import openai
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 
 from api.models.llm_models import (
     OpenAIConfig,
@@ -19,57 +19,53 @@ from api.models.llm_models import (
 from api.exceptions import ServiceError
 from api.services.agent_adapter import create_agent_definition_from_request
 from api.agents.agent_factory import AgentFactory
+from api.agents.agent_definition import LLMConfig
 from api.agents.models import AgentStatesEnum
-import json
-import re
 
 
 class ConfigCache:
     """Кэш для хранения конфигураций OpenAI API."""
     
     def __init__(self):
-        self._cache: Dict[str, OpenAI] = {}
+        from openai import AsyncOpenAI
+        self._cache: Dict[str, AsyncOpenAI] = {}
         self._configs: Dict[str, OpenAIConfig] = {}
     
-    def _get_cache_key(self, config: OpenAIConfig) -> str:
+    def _get_cache_key(self, config: OpenAIConfig, auth_module: Optional[str] = None) -> str:
         """Генерация ключа кэша на основе конфигурации."""
         # Используем api_key как основу ключа (первые 10 символов для безопасности)
         key_prefix = config.api_key[:10] if len(config.api_key) > 10 else config.api_key
         base_url = config.base_url or "https://api.openai.com/v1"
-        return f"{key_prefix}_{base_url}"
+        auth_part = f"_{auth_module}" if auth_module else ""
+        return f"{key_prefix}_{base_url}{auth_part}"
     
-    def get_client(self, config: OpenAIConfig) -> OpenAI:
+    def get_client(self, config: OpenAIConfig, auth_module: Optional[str] = None) -> AsyncOpenAI:
         """
-        Получение клиента OpenAI из кэша или создание нового.
+        Получение клиента OpenAI из кэша или создание нового через AgentFactory.
         
         Args:
             config: Конфигурация OpenAI API
+            auth_module: Опциональный модуль авторизации (например, 'api.agents.auth.gigachat_auth')
             
         Returns:
-            Клиент OpenAI
+            Асинхронный клиент OpenAI
         """
-        cache_key = self._get_cache_key(config)
+        from openai import AsyncOpenAI
+        cache_key = self._get_cache_key(config, auth_module)
         
         if cache_key not in self._cache:
             logger.info(f"Создание нового клиента OpenAI для ключа: {cache_key[:20]}...")
             
-            client_kwargs = {
-                "api_key": config.api_key,
-            }
+            # Преобразуем OpenAIConfig в LLMConfig для использования AgentFactory
+            llm_config = LLMConfig(
+                api_key=config.api_key,
+                base_url=config.base_url or "https://api.openai.com/v1",
+                model="gpt-4o-mini",  # Значение по умолчанию, не используется при создании клиента
+                auth_module=auth_module,
+            )
             
-            if config.base_url:
-                client_kwargs["base_url"] = config.base_url
-            
-            if config.organization:
-                client_kwargs["organization"] = config.organization
-            
-            if config.timeout:
-                client_kwargs["timeout"] = config.timeout
-            
-            if config.max_retries is not None:
-                client_kwargs["max_retries"] = config.max_retries
-            
-            client = OpenAI(**client_kwargs)
+            # Используем AgentFactory для создания клиента с поддержкой кастомных провайдеров
+            client = AgentFactory.create_client(llm_config)
             self._cache[cache_key] = client
             self._configs[cache_key] = config
             
@@ -114,6 +110,14 @@ class LLMService:
             api_key=request.llm_api_key,
             base_url=request.llm_url,
         )
+        
+        # Определяем auth_module на основе типа авторизации
+        auth_module = None
+        if request.llm_auth_type == 1:
+            auth_module = "api.agents.auth.yandexgpt_auth"
+        elif request.llm_auth_type == 2:
+            auth_module = "api.agents.auth.gigachat_auth"
+        
         chat_messages = context.get("chat_messages")
         has_history = chat_messages and len(chat_messages) > 0
         if has_history:
@@ -142,6 +146,7 @@ class LLMService:
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             extra_params=extra_params,
+            auth_module=auth_module,
         )
         return await self.generate_response(llm_request)
 
@@ -282,8 +287,8 @@ class LLMService:
         Raises:
             Exception: При ошибке обращения к API или если answer не найден после всех попыток
         """
-        # Получаем клиент из кэша
-        client = self.cache.get_client(request.openai_config)
+        # Получаем клиент из кэша (использует AgentFactory.create_client внутри)
+        client = self.cache.get_client(request.openai_config, auth_module=request.auth_module)
         
         # Подготавливаем параметры запроса
         completion_params = {
@@ -313,8 +318,8 @@ class LLMService:
             try:
                 logger.info(f"Отправка запроса к модели {request.model} (попытка {attempt + 1}/{max_retry_count})")
                 
-                # Выполняем запрос
-                response = client.chat.completions.create(**completion_params)
+                # Выполняем асинхронный запрос
+                response = await client.chat.completions.create(**completion_params)
                 
                 # Извлекаем ответ
                 if not response.choices or len(response.choices) == 0:

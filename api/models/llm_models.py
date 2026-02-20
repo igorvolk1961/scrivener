@@ -24,6 +24,7 @@ class LLMRequest(BaseModel):
     temperature: Optional[float] = Field(0.7, description="Температура генерации")
     max_tokens: Optional[int] = Field(None, description="Максимальное количество токенов")
     max_retry_count: int = Field(3, description="Максимальное количество повторных попыток при отсутствии answer в ответе")
+    auth_module: Optional[str] = Field(None, description="Опциональный модуль авторизации (например, 'api.agents.auth.gigachat_auth')")
 
     # Основной параметр: список сообщений [{"role": "user"|"assistant"|"system", "content": "..."}]
     messages: Optional[List[Dict[str, Any]]] = Field(None, description="Сообщения чата для контекста и запроса")
@@ -58,13 +59,20 @@ class AssistantRequest(BaseModel):
     
     # LLM
     llm_api_key: str = Field(..., description="API ключ LLM")
-    llm_auth_type: str = Field("0", description="Тип авторизации LLM")
+    llm_auth_type: int = Field("0", description="""Тип авторизации LLM: 
+                                    0 - Стандартный(по ключу  API)
+                                    1 - По идентификатору папки (Yandex)
+                                    2 - По временному токену (GigaChat)""")
+
     llm_model_name: str = Field(..., description="Модель LLM")
     llm_url: str = Field(..., description="URL LLM API")
     
     # Embeddings
     embed_api_key: Optional[str] = Field(None, description="API ключ для эмбеддингов")
-    embed_auth_type: Optional[str] = Field(None, description="Тип авторизации эмбеддингов")
+    embed_auth_type: Optional[str] = Field(None, description="""Тип авторизации эмбеддингов
+                                    0 - Стандартный(по ключу  API)
+                                    1 - По идентификатору папки (Yandex)
+                                    2 - По временному токену (GigaChat)""")
     embed_model_name: Optional[str] = Field(None, description="Модель эмбеддингов")
     embed_url: Optional[str] = Field(None, description="URL API эмбеддингов")
     embed_batch_size: Optional[int] = Field(None, description="Размер батча для эмбеддингов", gt=0)

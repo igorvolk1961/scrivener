@@ -4,6 +4,7 @@ Agent Factory для динамического создания агентов 
 """
 
 import importlib
+import inspect
 import logging
 from typing import Type, TypeVar
 
@@ -13,6 +14,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from api.agents.agent_definition import AgentDefinition, LLMConfig
 from api.agents.base_agent import BaseAgent
+from api.agents.auth.base_auth import BaseAuthProvider
 from api.agents.registry import AgentRegistry, ToolRegistry
 from loguru import logger
 
@@ -32,6 +34,7 @@ class AgentFactory:
         
         Args:
             auth_module: Путь к модулю (например, 'api.agents.auth.gigachat_auth')
+                        или полный путь с классом (например, 'api.agents.auth.gigachat_auth.GigaChatAuthProvider')
             
         Returns:
             Экземпляр провайдера авторизации
@@ -42,38 +45,67 @@ class AgentFactory:
         """
         # Определяем имя класса провайдера
         # Если указан полный путь с классом (например, 'api.agents.auth.gigachat_auth.GigaChatAuthProvider'),
-        # используем его; иначе пытаемся найти класс по имени модуля
-        if '.' in auth_module and auth_module.count('.') > 1:
-            parts = auth_module.rsplit('.', 1)
+        # используем его; иначе ищем в модуле класс-наследник BaseAuthProvider с именем *AuthProvider
+        parts = auth_module.rsplit('.', 1)
+        if len(parts) == 2 and parts[1] and parts[1][0].isupper():
             module_path = parts[0]
             class_name = parts[1]
         else:
             module_path = auth_module
-            # Пытаемся определить имя класса из имени модуля
-            # Например, 'gigachat_auth' -> 'GigaChatAuthProvider'
-            module_name = module_path.split('.')[-1]
-            class_name = ''.join(word.capitalize() for word in module_name.split('_')) + 'AuthProvider'
+            class_name = None  # будем искать в модуле
         
-        try:
-            module = importlib.import_module(module_path)
+        module = importlib.import_module(module_path)
+        
+        if class_name is not None:
             provider_class = getattr(module, class_name)
+            if not inspect.isclass(provider_class):
+                raise TypeError(
+                    f"'{class_name}' в модуле '{module_path}' не является классом. "
+                    f"Получен тип: {type(provider_class)}"
+                )
             return provider_class()
-        except ImportError as e:
-            logger.error(f"Не удалось импортировать модуль '{module_path}': {e}")
-            raise
-        except AttributeError as e:
-            logger.error(f"Класс '{class_name}' не найден в модуле '{module_path}': {e}")
-            raise
+        
+        # Ищем в модуле класс, наследующий BaseAuthProvider и оканчивающийся на AuthProvider
+        for attr_name in dir(module):
+            if attr_name.endswith('AuthProvider') and attr_name[0].isupper():
+                obj = getattr(module, attr_name)
+                if (
+                    inspect.isclass(obj)
+                    and issubclass(obj, BaseAuthProvider)
+                    and obj is not BaseAuthProvider
+                ):
+                    return obj()
+        
+        attrs = [x for x in dir(module) if not x.startswith('_')]
+        raise AttributeError(
+            f"В модуле '{module_path}' не найден класс-наследник BaseAuthProvider. "
+            f"Доступные атрибуты: {attrs}"
+        )
 
     @classmethod
-    def _create_client(cls, llm_config: LLMConfig) -> AsyncOpenAI:
+    def create_client(cls, llm_config: LLMConfig) -> AsyncOpenAI:
         """Create OpenAI client from configuration.
+        
+        Этот метод можно использовать для создания клиента OpenAI как для агентов,
+        так и для прямого использования LLM без агентов. Поддерживает кастомные
+        провайдеры авторизации через auth_module.
 
         Args:
             llm_config: LLM configuration
 
         Returns:
-            Configured AsyncOpenAI client
+            Configured AsyncOpenAI client (может быть обернут провайдером авторизации)
+
+        Examples:
+            >>> from api.agents.agent_definition import LLMConfig
+            >>> llm_config = LLMConfig(
+            ...     api_key="...",
+            ...     base_url="https://api.openai.com/v1",
+            ...     model="gpt-4",
+            ...     auth_module="api.agents.auth.gigachat_auth"  # опционально
+            ... )
+            >>> client = AgentFactory.create_client(llm_config)
+            >>> response = await client.chat.completions.create(...)
         """
         client_kwargs = {"base_url": llm_config.base_url, "api_key": llm_config.api_key}
         if llm_config.proxy:
@@ -89,6 +121,12 @@ class AgentFactory:
                     extra_kwargs = provider.get_client_kwargs(llm_config)
                     if extra_kwargs:
                         client_kwargs.update(extra_kwargs)
+                
+                # Если провайдер оборачивает клиент и подставляет свою авторизацию (например, GigaChat с временным токеном),
+                # создаём клиент с placeholder api_key, чтобы не слать credentials в заголовке — реальный токен добавит wrapper.
+                if hasattr(provider, 'wrap_client'):
+                    client_kwargs = dict(client_kwargs)
+                    client_kwargs["api_key"] = "placeholder"
                 
                 # Создаем клиент
                 client = AsyncOpenAI(**client_kwargs)
@@ -159,7 +197,7 @@ class AgentFactory:
                 task_messages=task_messages,
                 def_name=agent_def.name,
                 toolkit=tools,
-                openai_client=cls._create_client(agent_def.llm),
+                openai_client=cls.create_client(agent_def.llm),
                 agent_config=agent_def,
             )
             logger.info(

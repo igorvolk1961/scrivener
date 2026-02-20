@@ -2,9 +2,12 @@
   "api_url": "http://localhost:8000",
   "cfx_emulator_url": "http://localhost:8001",
   "llm": {
-    "url": "https://api.vsellm.ru/v1",
-    "api_key": "sk-Ok-HWQLB3xU7NehxnQ7zPw",
-    "model": "t-tech/T-pro-it-2.0",
+
+    "url": "https://gigachat.devices.sberbank.ru/api/v1",
+    "api_key": "M2RjNGFkZGEtOTA0MS00MzI0LTlmNzUtNzczNTIxNmQ0Zjk1OmFmNzE0NWQ3LWY5NDQtNGExNC05ZmZmLWEzYjE3Zjk5MjgwYw==",
+    "model": "GigaChat-2-Max",
+    "llm_auth_type":2,
+
     "temperature": 0.2,
     "max_tokens": 8000,
     "system_prompt": "Ты ИИ-помощник должностного лица (ДЛ). \n{userPost}\nОтвечай на русском языке в формате JSON. Поля ответа:\n- reasoning: список строк, содержащий шаги твоих размышлений\n- answer: строка с твоим ответом"

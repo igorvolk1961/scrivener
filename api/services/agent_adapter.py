@@ -64,7 +64,15 @@ def create_agent_definition_from_request(
 
     # Извлекаем информацию о пользователе из контекста для замены {userPost}
     user_info = context.get("userInfo")
-    
+
+    # Определяем auth_module на основе типа авторизации
+    # llm_auth_type: 1 = YandexGPT, 2 = GigaChat, остальное = стандартная авторизация
+    auth_module = None
+    if request.llm_auth_type == 1:
+        auth_module = "api.agents.auth.yandexgpt_auth"
+    elif request.llm_auth_type == 2:
+        auth_module = "api.agents.auth.gigachat_auth"
+
     # Создаем конфигурацию LLM
     llm_config = LLMConfig(
         api_key=request.llm_api_key,
@@ -72,6 +80,7 @@ def create_agent_definition_from_request(
         model=request.llm_model_name,
         temperature=request.temperature,
         max_tokens=request.max_tokens,
+        auth_module=auth_module
     )
     
     # Создаем конфигурацию поиска (если нужен интернет)
