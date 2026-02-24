@@ -148,7 +148,10 @@ Thumbs.db
 data/input/
 data/output/
 data/chunks/  # Результаты обработки документов
-data/qdrant_storage/  # Хранилище Qdrant
+# Хранилище Qdrant — не коммитить
+data/qdrant_storage/
+/data/qdrant_storage/
+data/qdrant_storage
 # Qdrant lock files
 **/LOCK
 **/*.lock

@@ -1,7 +1,7 @@
 qdrant:
   auto_start: true              # Автозапуск локального Qdrant при старте приложения (если не доступен по url)
   storage_path: "data/qdrant_storage"  # Папка хранилища (относительно корня проекта); передаётся в Qdrant при автозапуске
-  executable_path: "d:/programs/qdrant/qdrant.exe"
+  executable_path: "f:/programs/qdrant/qdrant.exe"
   config_path: "f:/programs/qdrant/qdrant_config.yaml"
   collection_name: "scrivener_documents"
   # Размер вектора определяется автоматически из эмбеддинга при создании коллекции

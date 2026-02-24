@@ -6,7 +6,8 @@ Agent Factory для динамического создания агентов 
 import importlib
 import inspect
 import logging
-from typing import Type, TypeVar
+from datetime import datetime
+from typing import Optional, Tuple, Type, TypeVar
 
 import httpx
 from openai import AsyncOpenAI
@@ -83,7 +84,7 @@ class AgentFactory:
         )
 
     @classmethod
-    def create_client(cls, llm_config: LLMConfig) -> AsyncOpenAI:
+    def create_client(cls, llm_config: LLMConfig) -> Tuple[AsyncOpenAI, Optional[datetime]]:
         """Create OpenAI client from configuration.
         
         Этот метод можно использовать для создания клиента OpenAI как для агентов,
@@ -94,7 +95,7 @@ class AgentFactory:
             llm_config: LLM configuration
 
         Returns:
-            Configured AsyncOpenAI client (может быть обернут провайдером авторизации)
+            (client, expires_at): клиент и момент истечения токена (None если ключ не устаревает)
 
         Examples:
             >>> from api.agents.agent_definition import LLMConfig
@@ -111,37 +112,30 @@ class AgentFactory:
         if llm_config.proxy:
             client_kwargs["http_client"] = httpx.AsyncClient(proxy=llm_config.proxy)
 
-        # Если указан auth_module, загружаем провайдер и применяем его настройки
+        # Если указан auth_module, загружаем провайдер: api_key и доп. параметры (заголовки и т.д.)
         if llm_config.auth_module:
             try:
                 provider = cls._load_auth_provider(llm_config.auth_module)
-                
-                # Получаем дополнительные параметры для client_kwargs (например, project для YandexGPT)
+                # api_key: провайдер может вернуть текущий токен (постоянный ключ → временный); иначе используем llm_config.api_key
+                if hasattr(provider, 'get_api_key_for_client'):
+                    key = provider.get_api_key_for_client(llm_config)
+                    if key is not None:
+                        client_kwargs["api_key"] = key
                 if hasattr(provider, 'get_client_kwargs'):
                     extra_kwargs = provider.get_client_kwargs(llm_config)
                     if extra_kwargs:
                         client_kwargs.update(extra_kwargs)
-                
-                # Если провайдер оборачивает клиент и подставляет свою авторизацию (например, GigaChat с временным токеном),
-                # создаём клиент с placeholder api_key, чтобы не слать credentials в заголовке — реальный токен добавит wrapper.
-                if hasattr(provider, 'wrap_client'):
-                    client_kwargs = dict(client_kwargs)
-                    client_kwargs["api_key"] = "placeholder"
-                
-                # Создаем клиент
                 client = AsyncOpenAI(**client_kwargs)
-                
-                # Если провайдер требует wrapper для динамических заголовков (например, GigaChat)
                 if hasattr(provider, 'wrap_client'):
                     client = provider.wrap_client(client, llm_config)
-                
-                return client
+                expires_at = provider.get_token_expires_at() if hasattr(provider, 'get_token_expires_at') else None
+                return (client, expires_at)
             except Exception as e:
                 logger.error(f"Ошибка при загрузке auth provider '{llm_config.auth_module}': {e}", exc_info=True)
                 raise ValueError(f"Failed to load auth provider '{llm_config.auth_module}': {e}") from e
 
-        # Стандартная логика без изменений
-        return AsyncOpenAI(**client_kwargs)
+        # Стандартная логика без изменений (ключ не устаревает)
+        return (AsyncOpenAI(**client_kwargs), None)
 
     @classmethod
     async def create(cls, agent_def: AgentDefinition, task_messages: list[ChatCompletionMessageParam]) -> Agent:
@@ -197,7 +191,7 @@ class AgentFactory:
                 task_messages=task_messages,
                 def_name=agent_def.name,
                 toolkit=tools,
-                openai_client=cls.create_client(agent_def.llm),
+                openai_client=cls.create_client(agent_def.llm)[0],
                 agent_config=agent_def,
             )
             logger.info(

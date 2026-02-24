@@ -4,6 +4,7 @@
 
 import json
 import re
+from datetime import datetime, timedelta
 from typing import Dict, Optional, Any
 from functools import lru_cache
 from loguru import logger
@@ -23,6 +24,9 @@ from api.agents.agent_definition import LLMConfig
 from api.agents.models import AgentStatesEnum
 
 
+# Запас времени до истечения токена: обновляем клиент, если до истечения меньше этого количества секунд
+_TOKEN_EXPIRY_BUFFER_SEC = 60
+
 class ConfigCache:
     """Кэш для хранения конфигураций OpenAI API."""
     
@@ -30,18 +34,20 @@ class ConfigCache:
         from openai import AsyncOpenAI
         self._cache: Dict[str, AsyncOpenAI] = {}
         self._configs: Dict[str, OpenAIConfig] = {}
+        self._expires: Dict[str, Optional[datetime]] = {}  # ключ кэша -> момент истечения токена (None = не устаревает)
     
     def _get_cache_key(self, config: OpenAIConfig, auth_module: Optional[str] = None) -> str:
         """Генерация ключа кэша на основе конфигурации."""
         # Используем api_key как основу ключа (первые 10 символов для безопасности)
         key_prefix = config.api_key[:10] if len(config.api_key) > 10 else config.api_key
         base_url = config.base_url or "https://api.openai.com/v1"
-        auth_part = f"_{auth_module}" if auth_module else ""
-        return f"{key_prefix}_{base_url}{auth_part}"
+        return f"{key_prefix}_{base_url}"
     
     def get_client(self, config: OpenAIConfig, auth_module: Optional[str] = None) -> AsyncOpenAI:
         """
         Получение клиента OpenAI из кэша или создание нового через AgentFactory.
+        Если у закэшированного клиента токен истекает в ближайшее время (см. _TOKEN_EXPIRY_BUFFER_SEC),
+        клиент инвалидируется и создаётся заново с новым токеном.
         
         Args:
             config: Конфигурация OpenAI API
@@ -52,34 +58,46 @@ class ConfigCache:
         """
         from openai import AsyncOpenAI
         cache_key = self._get_cache_key(config, auth_module)
-        
+        now = datetime.now()
+        expires_at = self._expires.get(cache_key)
+        if expires_at is not None and now >= expires_at - timedelta(seconds=_TOKEN_EXPIRY_BUFFER_SEC):
+            logger.info(f"Токен клиента скоро истечёт ({expires_at}), пересоздаём клиента")
+            self.invalidate_client(config, auth_module)
         if cache_key not in self._cache:
             logger.info(f"Создание нового клиента OpenAI для ключа: {cache_key[:20]}...")
-            
-            # Преобразуем OpenAIConfig в LLMConfig для использования AgentFactory
             llm_config = LLMConfig(
                 api_key=config.api_key,
                 base_url=config.base_url or "https://api.openai.com/v1",
-                model="gpt-4o-mini",  # Значение по умолчанию, не используется при создании клиента
+                model="gpt-4o-mini",
                 auth_module=auth_module,
             )
-            
-            # Используем AgentFactory для создания клиента с поддержкой кастомных провайдеров
-            client = AgentFactory.create_client(llm_config)
+            client, token_expires_at = AgentFactory.create_client(llm_config)
             self._cache[cache_key] = client
             self._configs[cache_key] = config
-            
+            self._expires[cache_key] = token_expires_at
             logger.info(f"Клиент OpenAI создан и закэширован")
         else:
             logger.debug(f"Использование закэшированного клиента OpenAI")
-        
         return self._cache[cache_key]
     
+    def invalidate_client(self, config: OpenAIConfig, auth_module: Optional[str] = None) -> None:
+        """Удаляет клиента из кэша по конфигурации и auth_module.
+        Следующий get_client создаст нового клиента с новым токеном."""
+        cache_key = self._get_cache_key(config, auth_module)
+        if cache_key in self._cache:
+            del self._cache[cache_key]
+            if cache_key in self._configs:
+                del self._configs[cache_key]
+            if cache_key in self._expires:
+                del self._expires[cache_key]
+            logger.info(f"Клиент OpenAI инвалидирован из кэша (ключ: {cache_key[:20]}...)")
+
     def clear_cache(self) -> None:
         """Очистка кэша клиентов."""
         logger.info("Очистка кэша клиентов OpenAI")
         self._cache.clear()
         self._configs.clear()
+        self._expires.clear()
     
     def get_cache_size(self) -> int:
         """Получение размера кэша."""
@@ -312,12 +330,30 @@ class LLMService:
         
         max_retry_count = request.max_retry_count or 3
         last_error: Optional[Exception] = None
-        
+        auth_refresh_done = False  # одна попытка обновления клиента при устаревшем токене (auth_module)
+
         # Повторяем запрос до max_retry_count раз, пока не найдём answer
+        base_url = request.openai_config.base_url or "https://api.openai.com/v1"
+        request_info = {
+            "model": request.model,
+            "base_url": base_url,
+            "auth_module": request.auth_module,
+            "num_messages": len(completion_params["messages"]),
+            "temperature": completion_params.get("temperature"),
+            "max_tokens": completion_params.get("max_tokens"),
+            "messages_preview": [
+                {"role": m.get("role"), "content_len": len(m.get("content") or "")}
+                for m in completion_params["messages"]
+            ],
+        }
+
         for attempt in range(max_retry_count):
             try:
-                logger.info(f"Отправка запроса к модели {request.model} (попытка {attempt + 1}/{max_retry_count})")
-                
+                logger.info(
+                    f"Отправка запроса к модели {request.model} (попытка {attempt + 1}/{max_retry_count}), "
+                    f"параметры: {request_info}"
+                )
+
                 # Выполняем асинхронный запрос
                 response = await client.chat.completions.create(**completion_params)
                 
@@ -404,7 +440,15 @@ class LLMService:
                     "code": e.code,
                 }
             except openai.AuthenticationError as e:
-                # Ошибки аутентификации не повторяем
+                # Провайдер не инициирует сообщение об устаревании. При auth_module (постоянный ключ → временный токен)
+                # инвалидируем кэш: новый клиент = новый экземпляр провайдера без временного токена; отсутствие токена
+                # провайдер трактует как «устарел» и получает новый по сохранённому постоянному ключу. Один повтор.
+                if request.auth_module and not auth_refresh_done:
+                    logger.warning(f"Ошибка аутентификации при auth_module, инвалидируем кэш и создаём нового клиента: {e}")
+                    self.cache.invalidate_client(request.openai_config, auth_module=request.auth_module)
+                    client = self.cache.get_client(request.openai_config, auth_module=request.auth_module)
+                    auth_refresh_done = True
+                    continue
                 logger.error(f"Ошибка аутентификации LLM API: {e}")
                 return {
                     "error": "Ошибка аутентификации",
@@ -430,8 +474,12 @@ class LLMService:
             except (openai.APIConnectionError, openai.APITimeoutError, openai.OpenAIError) as e:
                 # Ошибки соединения/таймаута/общие ошибки LLM - повторяем, если есть попытки
                 last_error = e
+                logger.warning(
+                    f"Ошибка LLM API (попытка {attempt + 1}/{max_retry_count}): тип={type(e).__name__}, сообщение={e!s}, "
+                    f"параметры запроса: {request_info}"
+                )
                 if attempt < max_retry_count - 1:
-                    logger.warning(f"Ошибка при запросе к LLM (попытка {attempt + 1}/{max_retry_count}): {e}")
+                    logger.warning("Повтор запроса к LLM")
                     continue
                 else:
                     # Последняя попытка - возвращаем словарь с error
@@ -454,10 +502,14 @@ class LLMService:
                             "code": "llm_api_error",
                         }
             except Exception as e:
-                # Другие ошибки - повторяем, если есть попытки
+                # Другие ошибки (не OpenAI-типы) — логируем тип и трассировку, чтобы понять причину
                 last_error = e
+                logger.warning(
+                    f"Неожиданное исключение в generate_response (попытка {attempt + 1}/{max_retry_count}): тип={type(e).__name__}, сообщение={e!s}",
+                    exc_info=True,
+                )
                 if attempt < max_retry_count - 1:
-                    logger.warning(f"Неожиданная ошибка при запросе к LLM (попытка {attempt + 1}/{max_retry_count}): {e}")
+                    logger.warning(f"Повтор запроса к LLM (попытка {attempt + 1}/{max_retry_count}): {e}")
                     continue
                 else:
                     logger.exception("Неожиданная ошибка при обращении к LLM")

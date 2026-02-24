@@ -3,7 +3,7 @@
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import httpx
@@ -16,8 +16,9 @@ from api.agents.agent_definition import LLMConfig
 class GigaChatAuthProvider(BaseAuthProvider):
     """Провайдер авторизации для GigaChat.
     
-    Управляет временным токеном (действует 30 минут) и добавляет заголовки
-    Authorization и RqUID к каждому запросу.
+    Постоянный ключ (api_key) сохраняется в credentials; по нему получается временный токен,
+    который передаётся в поле api_key клиента. Wrapper добавляет только RqUID к каждому запросу
+    (Authorization во wrapper не работает — задаётся через api_key клиента).
     """
 
     def __init__(self):
@@ -27,28 +28,27 @@ class GigaChatAuthProvider(BaseAuthProvider):
         self.scope: str = "GIGACHAT_API_PERS"
         self.timeout: int = 60
 
-    def get_client_kwargs(self, llm_config: LLMConfig) -> dict[str, Any] | None:
-        """Для GigaChat не нужны дополнительные параметры, токен добавляется динамически."""
-        return None
-
-    def wrap_client(self, client: AsyncOpenAI, llm_config: LLMConfig) -> AsyncOpenAI:
-        """Возвращает wrapper для управления токеном и RqUID.
-        
-        Args:
-            client: Базовый AsyncOpenAI клиент
-            llm_config: Конфигурация LLM
-            
-        Returns:
-            Обернутый клиент с добавлением токена и RqUID к каждому запросу
-        """
-        # Используем стандартный api_key как credentials для получения токена
+    def get_api_key_for_client(self, llm_config: LLMConfig) -> str:
+        """Возвращает текущий временный токен для поля api_key клиента (по постоянному ключу из llm_config.api_key)."""
         if not llm_config.api_key:
             raise ValueError(
                 "api_key не указан в LLMConfig (нужен base64(client_id:client_secret) для GigaChat)"
             )
+        self.credentials = llm_config.api_key
+        return self._get_access_token()
 
-        self.credentials = llm_config.api_key  # api_key используется как credentials для OAuth2
+    def get_client_kwargs(self, llm_config: LLMConfig) -> dict[str, Any] | None:
+        """Отключаем проверку SSL для запросов к GigaChat (сертификат часто не доверен в Windows). RqUID добавляется wrapper'ом."""
+        return {"http_client": httpx.AsyncClient(verify=False)}
 
+    def get_token_expires_at(self) -> Optional[datetime]:
+        """Токен GigaChat действует 30 минут."""
+        if self.token_obtained_at is None:
+            return None
+        return self.token_obtained_at + timedelta(seconds=1800)
+
+    def wrap_client(self, client: AsyncOpenAI, llm_config: LLMConfig) -> AsyncOpenAI:
+        """Возвращает wrapper, добавляющий только RqUID к каждому запросу (Authorization уже в api_key клиента)."""
         return GigaChatClientWrapper(client, self)
 
     def _get_access_token(self) -> str:
@@ -117,24 +117,22 @@ class GigaChatAuthProvider(BaseAuthProvider):
 
 
 class GigaChatClientWrapper:
-    """Wrapper для AsyncOpenAI, добавляющий токен и RqUID к каждому запросу."""
+    """Wrapper для AsyncOpenAI, добавляющий только RqUID к каждому запросу (Authorization в api_key клиента)."""
 
     def __init__(self, client: AsyncOpenAI, provider: GigaChatAuthProvider):
         self._client = client
         self._provider = provider
 
     def __getattr__(self, name):
-        """Делегируем все атрибуты базовому клиенту."""
         return getattr(self._client, name)
 
     @property
     def chat(self):
-        """Возвращает обернутый объект chat.completions."""
         return GigaChatChatWrapper(self._client.chat, self._provider)
 
 
 class GigaChatChatWrapper:
-    """Wrapper для chat.completions с добавлением заголовков."""
+    """Проброс к completions с добавлением RqUID."""
 
     def __init__(self, chat, provider: GigaChatAuthProvider):
         self._chat = chat
@@ -142,29 +140,24 @@ class GigaChatChatWrapper:
 
     @property
     def completions(self):
-        """Возвращает обернутый объект completions."""
         return GigaChatCompletionsWrapper(self._chat.completions, self._provider)
 
 
 class GigaChatCompletionsWrapper:
-    """Wrapper для completions с перехватом create() и stream()."""
+    """Добавляет только RqUID в extra_headers к create() и stream()."""
 
     def __init__(self, completions, provider: GigaChatAuthProvider):
         self._completions = completions
         self._provider = provider
 
     async def create(self, **kwargs):
-        """Добавляет токен и RqUID перед запросом."""
         extra_headers = kwargs.get("extra_headers", {})
-        extra_headers["Authorization"] = f"Bearer {self._provider._get_access_token()}"
         extra_headers["RqUID"] = self._provider._generate_rquid()
         kwargs["extra_headers"] = extra_headers
         return await self._completions.create(**kwargs)
 
     def stream(self, **kwargs):
-        """Добавляет токен и RqUID перед streaming запросом."""
         extra_headers = kwargs.get("extra_headers", {})
-        extra_headers["Authorization"] = f"Bearer {self._provider._get_access_token()}"
         extra_headers["RqUID"] = self._provider._generate_rquid()
         kwargs["extra_headers"] = extra_headers
         return self._completions.stream(**kwargs)

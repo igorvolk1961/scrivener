@@ -87,7 +87,7 @@ class QueryParaphraseTool(BaseTool):
 
             # Создаем клиент LLM через AgentFactory для поддержки кастомных провайдеров авторизации
             from api.agents.agent_factory import AgentFactory
-            openai_client = AgentFactory.create_client(config.llm)
+            openai_client = AgentFactory.create_client(config.llm)[0]
             
             # Вызываем LLM для перефразирования запроса
             response = await openai_client.chat.completions.create(
