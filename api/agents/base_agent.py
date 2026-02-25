@@ -220,6 +220,7 @@ class BaseAgent(AgentRegistryMixin):
         except Exception as e:
             self.logger.error(f"❌ Agent execution error: {str(e)}")
             self._context.state = AgentStatesEnum.FAILED
+            self._context.execution_result = str(e)
             traceback.print_exc()
         finally:
             if self.streaming_generator is not None:

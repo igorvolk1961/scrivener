@@ -73,10 +73,11 @@ def _check_running(base_url: str) -> bool:
 
 def _start_process(port: int) -> subprocess.Popen | None:
     """Запускает gpt2giga в фоне. Возвращает Popen или None при ошибке."""
-    # Аргументы как при ручном запуске: --proxy.pass-token true --gigachat.verify-ssl-certs false
+    # Аргументы как при ручном запуске: передаём модель из запроса клиента, токен и отключаем проверку SSL
     base_args = [
         "--proxy.port", str(port),
         "--proxy.pass-token", "true",
+        "--proxy.pass-model", "true",
         "--gigachat.verify-ssl-certs", "false",
     ]
     cmd = shutil.which("gpt2giga")

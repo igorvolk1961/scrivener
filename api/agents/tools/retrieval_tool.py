@@ -59,6 +59,7 @@ class RetrievalTool(BaseTool):
             embed_url = None
             embed_model_name = None
             embed_batch_size = None
+            custom_dict = None
             
             # Безопасно получаем custom_context из AgentContext (BaseModel)
             # Используем model_dump() для безопасного извлечения значений полей
@@ -83,8 +84,6 @@ class RetrievalTool(BaseTool):
                 
                 # Обрабатываем полученное значение custom_context
                 if custom_context_value is not None:
-                    custom_dict = None
-                    
                     # Если это словарь - используем напрямую
                     if isinstance(custom_context_value, dict):
                         custom_dict = custom_context_value
@@ -123,6 +122,12 @@ class RetrievalTool(BaseTool):
                     "Для выполнения RAG поиска необходимо указать vdb_url в параметрах запроса или custom_context"
                 )
             
+            # Идентификаторы уже найденных чанков — передаём в поиск как исключение (без повторов в контексте LLM)
+            exclude_chunk_ids = list((custom_dict or {}).get("retrieved_chunk_ids") or [])
+            filter_metadata = {"exclude_chunk_ids": exclude_chunk_ids} if exclude_chunk_ids else None
+            if exclude_chunk_ids:
+                logger.info(f"Исключаем из поиска {len(exclude_chunk_ids)} ранее найденных чанков")
+            
             # Инициализируем компоненты RAG
             embedding, vector_store_manager = self._initialize_rag_components(
                 vdb_url=vdb_url,
@@ -139,12 +144,24 @@ class RetrievalTool(BaseTool):
                 vdb_url=vdb_url
             )
             
-            # Выполняем поиск без фильтрации
+            # Выполняем поиск (с исключением уже найденных чанков при повторном поиске)
             results = retriever.retrieve(
                 query=self.query,
                 top_k=self.max_results,
-                filter_metadata=None
+                filter_metadata=filter_metadata
             )
+            
+            # Сохраняем идентификаторы найденных чанков в custom_context для последующих поисков
+            new_ids = [r.get("id") for r in results if r.get("id") is not None]
+            if new_ids:
+                custom_ref = getattr(context, "custom_context", None)
+                if custom_ref is None:
+                    context.custom_context = {}
+                    custom_ref = context.custom_context
+                if isinstance(custom_ref, dict):
+                    existing = custom_ref.get("retrieved_chunk_ids") or []
+                    custom_ref["retrieved_chunk_ids"] = existing + new_ids
+                    logger.debug(f"В custom_context сохранено {len(existing) + len(new_ids)} id чанков")
             
             # Форматируем результаты
             return self._format_results(results, self.query)

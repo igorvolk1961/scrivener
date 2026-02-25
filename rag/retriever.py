@@ -569,57 +569,69 @@ class DocumentRetriever:
             return documents[:top_k]
     
     def _prepare_filter(self, filter_metadata: Optional[Dict[str, Any]] = None) -> Optional[Filter]:
-        """Подготовка фильтра по метаданным."""
+        """Подготовка фильтра по метаданным. Поддерживает exclude_chunk_ids для исключения уже найденных чанков."""
         if not filter_metadata:
             return None
-        
+
+        exclude_chunk_ids = filter_metadata.get("exclude_chunk_ids") or []
         must_conditions = []
         for key, value in filter_metadata.items():
+            if key == "exclude_chunk_ids":
+                continue
             must_conditions.append(
                 FieldCondition(
                     key=key,
                     match=MatchValue(value=value)
                 )
             )
-        
+
+        must_not_conditions = []
+        if exclude_chunk_ids:
+            must_not_conditions.append(HasIdCondition(has_id=list(exclude_chunk_ids)))
+
+        if must_not_conditions and not must_conditions:
+            return Filter(must_not=must_not_conditions)
+        if must_conditions and must_not_conditions:
+            return Filter(must=must_conditions, must_not=must_not_conditions)
         if must_conditions:
             return Filter(must=must_conditions)
         return None
     
     def _filter_to_dict(self, search_filter: Optional[Filter]) -> Optional[Dict]:
-        """Преобразование Filter в словарь для JSON."""
+        """Преобразование Filter в словарь для JSON (включая must_not для exclude_chunk_ids)."""
         if not search_filter:
             return None
-        
-        if hasattr(search_filter, 'dict'):
-            return search_filter.dict()
-        elif hasattr(search_filter, 'model_dump'):
-            return search_filter.model_dump()
-        elif hasattr(search_filter, 'must') and search_filter.must:
-            must_conditions = []
-            for cond in search_filter.must:
-                # Обработка HasIdCondition
+
+        def _serialize_conditions(conditions):
+            out = []
+            for cond in (conditions or []):
                 if isinstance(cond, HasIdCondition):
                     has_id = cond.has_id if hasattr(cond, 'has_id') else getattr(cond, 'has_id', None)
                     if has_id:
-                        must_conditions.append({
-                            "has_id": has_id if isinstance(has_id, list) else [has_id]
-                        })
-                # Обработка FieldCondition
+                        out.append({"has_id": has_id if isinstance(has_id, list) else [has_id]})
                 elif hasattr(cond, 'key') and hasattr(cond, 'match'):
                     match_value = cond.match.value if hasattr(cond.match, 'value') else cond.match
-                    must_conditions.append({
-                        "key": cond.key,
-                        "match": {"value": match_value}
-                    })
-                # Попытка автоматического преобразования для других типов условий
+                    out.append({"key": cond.key, "match": {"value": match_value}})
                 elif hasattr(cond, 'dict'):
-                    must_conditions.append(cond.dict())
+                    out.append(cond.dict())
                 elif hasattr(cond, 'model_dump'):
-                    must_conditions.append(cond.model_dump())
-            
-            if must_conditions:
-                return {"must": must_conditions}
+                    out.append(cond.model_dump())
+            return out if out else None
+
+        if hasattr(search_filter, 'dict'):
+            return search_filter.dict()
+        if hasattr(search_filter, 'model_dump'):
+            return search_filter.model_dump()
+
+        must = _serialize_conditions(getattr(search_filter, 'must', None))
+        must_not = _serialize_conditions(getattr(search_filter, 'must_not', None))
+        if must or must_not:
+            d = {}
+            if must:
+                d["must"] = must
+            if must_not:
+                d["must_not"] = must_not
+            return d
         return None
     
     def _parse_search_results(self, search_results: List) -> List[Dict[str, Any]]:

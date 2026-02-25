@@ -257,9 +257,12 @@ class LLMService:
                 
                 return result
             elif agent._context.state == AgentStatesEnum.FAILED:
+                detail = agent._context.execution_result or "Неизвестная ошибка"
+                if "402" in detail and "Payment Required" in detail:
+                    detail = "Недостаточно средств (402 Payment Required). Проверьте баланс или тарифный план GigaChat."
                 return {
                     "error": "Агент завершил работу с ошибкой",
-                    "detail": agent._context.execution_result or "Неизвестная ошибка",
+                    "detail": detail,
                     "code": "agent_failed",
                 }
             else:
