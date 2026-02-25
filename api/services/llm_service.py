@@ -2,7 +2,9 @@
 Сервис для работы с LLM через OpenAI API.
 """
 
+import asyncio
 import json
+import os
 import re
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Any
@@ -22,6 +24,7 @@ from api.services.agent_adapter import create_agent_definition_from_request
 from api.agents.agent_factory import AgentFactory
 from api.agents.agent_definition import LLMConfig
 from api.agents.models import AgentStatesEnum
+from api.services.gpt2giga_runner import ensure_gpt2giga_running, get_gpt2giga_base_url
 
 
 # Запас времени до истечения токена: обновляем клиент, если до истечения меньше этого количества секунд
@@ -124,12 +127,17 @@ class LLMService:
         Возвращает словарь с полем content или error.
         """
         context = context or {}
+        base_url = request.llm_url
+        if request.llm_auth_type == 2:
+            gpt2giga_url = get_gpt2giga_base_url()
+            base_url = gpt2giga_url.rstrip("/")
+            if not base_url.endswith("/v1"):
+                base_url = f"{base_url}/v1"
+            await asyncio.to_thread(ensure_gpt2giga_running, gpt2giga_url)
         openai_config = OpenAIConfig(
             api_key=request.llm_api_key,
-            base_url=request.llm_url,
+            base_url=base_url,
         )
-        
-        # Определяем auth_module на основе типа авторизации
         auth_module = None
         if request.llm_auth_type == 1:
             auth_module = "api.agents.auth.yandexgpt_auth"

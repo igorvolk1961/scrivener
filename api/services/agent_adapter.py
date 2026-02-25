@@ -2,6 +2,7 @@
 Адаптер для преобразования AssistantRequest в AgentDefinition.
 """
 
+import os
 import uuid
 from typing import Dict, Any, Optional
 
@@ -24,6 +25,7 @@ from api.agents.tools import (
     ChunkHorizontalExtensionTool,
     ChunkVerticalExtensionTool
 )
+from api.services.gpt2giga_runner import ensure_gpt2giga_running, get_gpt2giga_base_url
 
 
 def create_agent_definition_from_request(
@@ -73,14 +75,23 @@ def create_agent_definition_from_request(
     elif request.llm_auth_type == 2:
         auth_module = "api.agents.auth.gigachat_auth"
 
-    # Создаем конфигурацию LLM
+    # GigaChat: по умолчанию используем прокси gpt2giga на том же сервере (OpenAI-совместимый tool_calls и стриминг)
+    base_url = request.llm_url
+    if auth_module == "api.agents.auth.gigachat_auth":
+        gpt2giga_url = get_gpt2giga_base_url()
+        base_url = gpt2giga_url.rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
+        ensure_gpt2giga_running(gpt2giga_url)
+    use_streaming = True
     llm_config = LLMConfig(
         api_key=request.llm_api_key,
-        base_url=request.llm_url,
+        base_url=base_url,
         model=request.llm_model_name,
         temperature=request.temperature,
         max_tokens=request.max_tokens,
-        auth_module=auth_module
+        auth_module=auth_module,
+        use_streaming=use_streaming,
     )
     
     # Создаем конфигурацию поиска (если нужен интернет)

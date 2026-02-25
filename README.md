@@ -52,6 +52,13 @@ pip install -r requirements.txt
    - При запуске API сервера локальный Qdrant может стартовать автоматически, если в `config.yaml` заданы `qdrant.executable_path` и `qdrant.config_path` и включён `qdrant.auto_start: true`. Если Qdrant уже доступен по `qdrant.url` — автозапуск не выполняется.
    - Иначе запустите Qdrant вручную (локально или удалённо) — это единственный необходимый внешний сервис.
 
+6. **GigaChat и прокси gpt2giga**  
+   При выборе GigaChat (`llm_auth_type=2`) запросы идут через прокси [gpt2giga](https://github.com/ai-forever/gpt2giga) (формат OpenAI → GigaChat API, в т.ч. `tool_calls` и стриминг). По умолчанию прокси разворачивается на том же сервере, что и Scrivener:
+   - **Автозапуск**: при первом использовании GigaChat проверяется доступность gpt2giga по адресу из `GPT2GIGA_BASE_URL` (по умолчанию `http://localhost:8090`). Если адрес локальный и сервис не отвечает — процесс gpt2giga запускается автоматически. Для этого на сервере должен быть установлен gpt2giga: `pip install gpt2giga` или `uv tool install gpt2giga`.
+   - Чтобы использовать уже запущенный gpt2giga на другом хосте, задайте переменную окружения: `GPT2GIGA_BASE_URL=http://host:8090` (суффикс `/v1` подставится при необходимости). Автозапуск выполняется только для localhost/127.0.0.1.
+   - В gpt2giga при передаче токена из приложения в GigaChat задайте, например, `GPT2GIGA_PASS_TOKEN=True`.
+   - Если в логах появляется «Stream interrupted: SSL CERTIFICATE_VERIFY_FAILED», проверка сертификата падает при обращении **прокси gpt2giga к GigaChat API**, а не между Scrivener и прокси. Задайте для процесса gpt2giga переменную окружения `GIGACHAT_VERIFY_SSL_CERTS=False` (в `.env` gpt2giga или при автозапуске через Scrivener — в окружении процесса gpt2giga).
+
 ## Структура проекта
 
 ```

@@ -125,6 +125,9 @@ class AgentFactory:
                     extra_kwargs = provider.get_client_kwargs(llm_config)
                     if extra_kwargs:
                         client_kwargs.update(extra_kwargs)
+                # GigaChat и прокси gpt2giga часто работают по HTTPS с самоподписанным сертификатом — принудительно отключаем проверку SSL
+                if "gigachat_auth" in (llm_config.auth_module or ""):
+                    client_kwargs["http_client"] = httpx.AsyncClient(verify=False, timeout=60.0)
                 client = AsyncOpenAI(**client_kwargs)
                 if hasattr(provider, 'wrap_client'):
                     client = provider.wrap_client(client, llm_config)

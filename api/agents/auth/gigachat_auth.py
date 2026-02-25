@@ -2,12 +2,15 @@
 Провайдер авторизации для GigaChat.
 """
 
+import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import httpx
 from openai import AsyncOpenAI
+
+logger = logging.getLogger(__name__)
 
 from api.agents.auth.base_auth import BaseAuthProvider
 from api.agents.agent_definition import LLMConfig
@@ -16,9 +19,9 @@ from api.agents.agent_definition import LLMConfig
 class GigaChatAuthProvider(BaseAuthProvider):
     """Провайдер авторизации для GigaChat.
     
-    Постоянный ключ (api_key) сохраняется в credentials; по нему получается временный токен,
-    который передаётся в поле api_key клиента. Wrapper добавляет только RqUID к каждому запросу
-    (Authorization во wrapper не работает — задаётся через api_key клиента).
+    Передаём в прокси (gpt2giga) ключ в формате giga-cred-<base64>:scope — прокси сам
+    получает токен по OAuth (подстановка access_token после создания клиента в прокси даёт 401).
+    Wrapper добавляет RqUID к каждому запросу.
     """
 
     def __init__(self):
@@ -29,13 +32,14 @@ class GigaChatAuthProvider(BaseAuthProvider):
         self.timeout: int = 60
 
     def get_api_key_for_client(self, llm_config: LLMConfig) -> str:
-        """Возвращает текущий временный токен для поля api_key клиента (по постоянному ключу из llm_config.api_key)."""
+        """Возвращает для прокси gpt2giga формат giga-cred-<ключ>:scope.
+        Прокси сам выполняет OAuth по ключу (giga-auth- после мутации _settings в прокси даёт 401)."""
         if not llm_config.api_key:
             raise ValueError(
                 "api_key не указан в LLMConfig (нужен base64(client_id:client_secret) для GigaChat)"
             )
         self.credentials = llm_config.api_key
-        return self._get_access_token()
+        return f"giga-cred-{self.credentials}:{self.scope}"
 
     def get_client_kwargs(self, llm_config: LLMConfig) -> dict[str, Any] | None:
         """Отключаем проверку SSL для запросов к GigaChat (сертификат часто не доверен в Windows). RqUID добавляется wrapper'ом."""
@@ -143,6 +147,24 @@ class GigaChatChatWrapper:
         return GigaChatCompletionsWrapper(self._chat.completions, self._provider)
 
 
+def _log_proxy_call(method: str, kwargs: dict, extra_headers: dict, completions: Any) -> None:
+    """Логирует параметры вызова к прокси gpt2giga для сравнения с прямым вызовом."""
+    base_url = getattr(getattr(completions, "_client", None), "base_url", None) or "(unknown)"
+    model = kwargs.get("model", "")
+    messages = kwargs.get("messages", [])
+    max_tokens = kwargs.get("max_tokens")
+    rquid = extra_headers.get("RqUID", "")
+    logger.info(
+        "GigaChat через прокси (gpt2giga): method=%s base_url=%s model=%s messages_count=%s max_tokens=%s RqUID=%s",
+        method, base_url, model, len(messages), max_tokens, rquid,
+    )
+    if messages:
+        last_msg = messages[-1] if isinstance(messages[-1], dict) else {}
+        content = last_msg.get("content", "")
+        preview = (content[:80] + "…") if len(content) > 80 else content
+        logger.debug("GigaChat прокси: последнее сообщение content=%r", preview)
+
+
 class GigaChatCompletionsWrapper:
     """Добавляет только RqUID в extra_headers к create() и stream()."""
 
@@ -151,13 +173,15 @@ class GigaChatCompletionsWrapper:
         self._provider = provider
 
     async def create(self, **kwargs):
-        extra_headers = kwargs.get("extra_headers", {})
+        extra_headers = kwargs.get("extra_headers", {}) or {}
         extra_headers["RqUID"] = self._provider._generate_rquid()
         kwargs["extra_headers"] = extra_headers
+        _log_proxy_call("create", kwargs, extra_headers, self._completions)
         return await self._completions.create(**kwargs)
 
     def stream(self, **kwargs):
-        extra_headers = kwargs.get("extra_headers", {})
+        extra_headers = kwargs.get("extra_headers", {}) or {}
         extra_headers["RqUID"] = self._provider._generate_rquid()
         kwargs["extra_headers"] = extra_headers
+        _log_proxy_call("stream", kwargs, extra_headers, self._completions)
         return self._completions.stream(**kwargs)

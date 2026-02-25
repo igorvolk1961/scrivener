@@ -1,6 +1,7 @@
 """
 SGR Tool Calling Agent с поддержкой streaming и retry логики.
 Адаптировано из sgr-agent-core с добавлением retry логики.
+Стриминг опционален (use_streaming в LLMConfig); для GigaChat используется create() без стриминга.
 """
 
 from typing import Literal, Type
@@ -75,22 +76,40 @@ class SGRToolCallingAgent(BaseAgent):
         for attempt in range(max_retries):
             try:
                 self.logger.info(f"Reasoning phase (попытка {attempt + 1}/{max_retries})")
-                
-                async with self.openai_client.chat.completions.stream(
-                    messages=await self._prepare_context(),
-                    tools=[pydantic_function_tool(ReasoningTool, name=ReasoningTool.tool_name)],
-                    tool_choice={"type": "function", "function": {"name": ReasoningTool.tool_name}},
-                    **self.config.llm.to_openai_client_kwargs(),
-                ) as stream:
-                    async for event in stream:
-                        if event.type == "chunk":
-                            self.streaming_generator.add_chunk(event.chunk)
-                    
-                    completion = await stream.get_final_completion()
-                    reasoning: ReasoningTool = (
-                        completion.choices[0].message.tool_calls[0].function.parsed_arguments
+                kwargs = self.config.llm.to_openai_client_kwargs()
+                messages = await self._prepare_context()
+                tools_spec = [pydantic_function_tool(ReasoningTool, name=ReasoningTool.tool_name)]
+                tool_choice = {"type": "function", "function": {"name": ReasoningTool.tool_name}}
+
+                self.config.llm.use_streaming = True;
+                if self.config.llm.use_streaming:
+                    async with self.openai_client.chat.completions.stream(
+                        messages=messages,
+                        tools=tools_spec,
+                        tool_choice=tool_choice,
+                        **kwargs,
+                    ) as stream:
+                        async for event in stream:
+                            if event.type == "chunk":
+                                self.streaming_generator.add_chunk(event.chunk)
+                        completion = await stream.get_final_completion()
+                    reasoning = completion.choices[0].message.tool_calls[0].function.parsed_arguments
+                else:
+                    completion = await self.openai_client.chat.completions.create(
+                        messages=messages,
+                        tools=tools_spec,
+                        tool_choice=tool_choice,
+                        **kwargs,
                     )
-                
+                    msg = completion.choices[0].message
+                    if not msg.tool_calls:
+                        raise ValueError("LLM не вернул tool call (reasoning)")
+                    tc = msg.tool_calls[0]
+                    args_str = getattr(tc.function, "arguments", None) or ""
+                    reasoning = ReasoningTool.model_validate_json(args_str)
+                    if msg.content:
+                        self.streaming_generator.add_chunk_from_str(msg.content)
+
                 self.conversation.append(
                     {
                         "role": "assistant",
@@ -161,25 +180,45 @@ class SGRToolCallingAgent(BaseAgent):
         for attempt in range(max_retries):
             try:
                 self.logger.info(f"Select action phase (попытка {attempt + 1}/{max_retries})")
-                
-                async with self.openai_client.chat.completions.stream(
-                    messages=await self._prepare_context(),
-                    tools=await self._prepare_tools(),
-                    tool_choice=self.tool_choice,
-                    **self.config.llm.to_openai_client_kwargs(),
-                ) as stream:
-                    async for event in stream:
-                        if event.type == "chunk":
-                            self.streaming_generator.add_chunk(event.chunk)
+                kwargs = self.config.llm.to_openai_client_kwargs()
+                messages = await self._prepare_context()
+                tools_spec = await self._prepare_tools()
 
-                    completion = await stream.get_final_completion()
+                if self.config.llm.use_streaming:
+                    async with self.openai_client.chat.completions.stream(
+                        messages=messages,
+                        tools=tools_spec,
+                        tool_choice=self.tool_choice,
+                        **kwargs,
+                    ) as stream:
+                        async for event in stream:
+                            if event.type == "chunk":
+                                self.streaming_generator.add_chunk(event.chunk)
+                        completion = await stream.get_final_completion()
+                    tool = completion.choices[0].message.tool_calls[0].function.parsed_arguments
+                else:
+                    completion = await self.openai_client.chat.completions.create(
+                        messages=messages,
+                        tools=tools_spec,
+                        tool_choice=self.tool_choice,
+                        **kwargs,
+                    )
+                    msg = completion.choices[0].message
+                    if not msg.tool_calls:
+                        raise ValueError("LLM не вернул tool call (select action)")
+                    tc = msg.tool_calls[0]
+                    name = getattr(tc.function, "name", None) or ""
+                    args_str = getattr(tc.function, "arguments", None) or "{}"
+                    tool_class = next((t for t in self.toolkit if getattr(t, "tool_name", None) == name), None)
+                    if not tool_class:
+                        raise ValueError(f"Неизвестный инструмент: {name}")
+                    tool = tool_class.model_validate_json(args_str)
+                    if msg.content:
+                        self.streaming_generator.add_chunk_from_str(msg.content)
 
                 # Извлекаем tool call из ответа
                 if not completion.choices or not completion.choices[0].message.tool_calls:
                     raise ValueError("LLM не вернул tool call. Провайдер может не поддерживать tool calling в streaming режиме.")
-                
-                tool = completion.choices[0].message.tool_calls[0].function.parsed_arguments
-                
                 if not isinstance(tool, BaseTool):
                     raise ValueError("Selected tool is not a valid BaseTool instance")
                 

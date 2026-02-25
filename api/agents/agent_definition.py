@@ -34,9 +34,13 @@ class LLMConfig(BaseModel, extra="allow"):
         default=None,
         description="Optional Python module path for custom authentication provider (e.g., 'api.agents.auth.gigachat_auth')"
     )
+    use_streaming: bool = Field(
+        default=True,
+        description="Use streaming for chat completions (False for providers that don't support it, e.g. GigaChat)",
+    )
 
     def to_openai_client_kwargs(self) -> dict[str, Any]:
-        return self.model_dump(exclude={"api_key", "base_url", "proxy", "auth_module"})
+        return self.model_dump(exclude={"api_key", "base_url", "proxy", "auth_module", "use_streaming"})
 
 
 class SearchConfig(BaseModel, extra="allow"):
