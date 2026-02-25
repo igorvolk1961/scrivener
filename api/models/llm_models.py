@@ -18,7 +18,7 @@ class OpenAIConfig(BaseModel):
 
 class LLMRequest(BaseModel):
     """Базовый запрос к LLM (внутреннее использование)."""
-    
+
     openai_config: OpenAIConfig = Field(..., description="Конфигурация доступа к OpenAI API")
     model: Optional[str] = Field("gpt-3.5-turbo", description="Модель для использования")
     temperature: Optional[float] = Field(0.7, description="Температура генерации")

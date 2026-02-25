@@ -25,7 +25,7 @@ from api.agents.tools import (
     ChunkHorizontalExtensionTool,
     ChunkVerticalExtensionTool
 )
-from api.services.gpt2giga_runner import ensure_gpt2giga_running, get_gpt2giga_base_url
+from api.services.gpt2giga_runner import ensure_gpt2giga_running
 
 
 def create_agent_definition_from_request(
@@ -75,14 +75,12 @@ def create_agent_definition_from_request(
     elif request.llm_auth_type == 2:
         auth_module = "api.agents.auth.gigachat_auth"
 
-    # GigaChat: по умолчанию используем прокси gpt2giga на том же сервере (OpenAI-совместимый tool_calls и стриминг)
-    base_url = request.llm_url
+    # llm_url универсальный: куда обращаться к модели; llm_auth_type задаёт способ обработки (в т.ч. GigaChat через прокси)
+    base_url = request.llm_url.strip().rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = f"{base_url}/v1"
     if auth_module == "api.agents.auth.gigachat_auth":
-        gpt2giga_url = get_gpt2giga_base_url()
-        base_url = gpt2giga_url.rstrip("/")
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url}/v1"
-        ensure_gpt2giga_running(gpt2giga_url)
+        ensure_gpt2giga_running(request.llm_url.strip().rstrip("/"))
     use_streaming = True
     llm_config = LLMConfig(
         api_key=request.llm_api_key,

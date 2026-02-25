@@ -3,9 +3,10 @@
   "cfx_emulator_url": "http://localhost:8001",
   "llm": {
 
-    "url": "https://gigachat.devices.sberbank.ru/api/v1",
+    "url": "http://localhost:8090",
     "api_key": "M2RjNGFkZGEtOTA0MS00MzI0LTlmNzUtNzczNTIxNmQ0Zjk1OmFmNzE0NWQ3LWY5NDQtNGExNC05ZmZmLWEzYjE3Zjk5MjgwYw==",
     "model": "GigaChat-2-Max",
+    "llm_auth_type":2,
 
     "temperature": 0.2,
     "max_tokens": 8000,

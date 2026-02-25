@@ -21,10 +21,10 @@ from api.models.llm_models import (
 )
 from api.exceptions import ServiceError
 from api.services.agent_adapter import create_agent_definition_from_request
-from api.agents.agent_factory import AgentFactory
 from api.agents.agent_definition import LLMConfig
+from api.agents.agent_factory import AgentFactory
 from api.agents.models import AgentStatesEnum
-from api.services.gpt2giga_runner import ensure_gpt2giga_running, get_gpt2giga_base_url
+from api.services.gpt2giga_runner import ensure_gpt2giga_running
 
 
 # Запас времени до истечения токена: обновляем клиент, если до истечения меньше этого количества секунд
@@ -41,23 +41,15 @@ class ConfigCache:
     
     def _get_cache_key(self, config: OpenAIConfig, auth_module: Optional[str] = None) -> str:
         """Генерация ключа кэша на основе конфигурации."""
-        # Используем api_key как основу ключа (первые 10 символов для безопасности)
-        key_prefix = config.api_key[:10] if len(config.api_key) > 10 else config.api_key
+        key_prefix = config.api_key[:10] if config.api_key and len(config.api_key) > 10 else (config.api_key or "")
         base_url = config.base_url or "https://api.openai.com/v1"
         return f"{key_prefix}_{base_url}"
-    
+
     def get_client(self, config: OpenAIConfig, auth_module: Optional[str] = None) -> AsyncOpenAI:
         """
         Получение клиента OpenAI из кэша или создание нового через AgentFactory.
         Если у закэшированного клиента токен истекает в ближайшее время (см. _TOKEN_EXPIRY_BUFFER_SEC),
         клиент инвалидируется и создаётся заново с новым токеном.
-        
-        Args:
-            config: Конфигурация OpenAI API
-            auth_module: Опциональный модуль авторизации (например, 'api.agents.auth.gigachat_auth')
-            
-        Returns:
-            Асинхронный клиент OpenAI
         """
         from openai import AsyncOpenAI
         cache_key = self._get_cache_key(config, auth_module)
@@ -82,10 +74,9 @@ class ConfigCache:
         else:
             logger.debug(f"Использование закэшированного клиента OpenAI")
         return self._cache[cache_key]
-    
+
     def invalidate_client(self, config: OpenAIConfig, auth_module: Optional[str] = None) -> None:
-        """Удаляет клиента из кэша по конфигурации и auth_module.
-        Следующий get_client создаст нового клиента с новым токеном."""
+        """Удаляет клиента из кэша по конфигурации и auth_module."""
         cache_key = self._get_cache_key(config, auth_module)
         if cache_key in self._cache:
             del self._cache[cache_key]
@@ -127,23 +118,26 @@ class LLMService:
         Возвращает словарь с полем content или error.
         """
         context = context or {}
-        base_url = request.llm_url
+        base_url = request.llm_url.strip().rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
         if request.llm_auth_type == 2:
-            gpt2giga_url = get_gpt2giga_base_url()
-            base_url = gpt2giga_url.rstrip("/")
-            if not base_url.endswith("/v1"):
-                base_url = f"{base_url}/v1"
-            await asyncio.to_thread(ensure_gpt2giga_running, gpt2giga_url)
-        openai_config = OpenAIConfig(
-            api_key=request.llm_api_key,
-            base_url=base_url,
-        )
+            await asyncio.to_thread(ensure_gpt2giga_running, request.llm_url.strip().rstrip("/"))
         auth_module = None
         if request.llm_auth_type == 1:
             auth_module = "api.agents.auth.yandexgpt_auth"
         elif request.llm_auth_type == 2:
             auth_module = "api.agents.auth.gigachat_auth"
-        
+        llm_config = LLMConfig(
+            api_key=request.llm_api_key,
+            base_url=base_url,
+            model=request.llm_model_name,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            auth_module=auth_module,
+        )
+        openai_config = OpenAIConfig(api_key=request.llm_api_key, base_url=base_url)
+
         chat_messages = context.get("chat_messages")
         has_history = chat_messages and len(chat_messages) > 0
         if has_history:
@@ -315,7 +309,7 @@ class LLMService:
         """
         # Получаем клиент из кэша (использует AgentFactory.create_client внутри)
         client = self.cache.get_client(request.openai_config, auth_module=request.auth_module)
-        
+
         # Подготавливаем параметры запроса
         completion_params = {
             "model": request.model,
