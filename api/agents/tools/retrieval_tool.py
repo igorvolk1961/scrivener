@@ -36,7 +36,7 @@ class RetrievalTool(BaseTool):
     reasoning: str = Field(description="Why this RAG search is needed and what information is expected")
     query: str = Field(description="Search query to find relevant information in the knowledge base")
     max_results: int = Field(
-        description="Maximum number of results to retrieve",
+        description="Maximum number of results to retrieve. Integer from 1 upwards, default 5.",
         default=5,
         ge=1,
     )

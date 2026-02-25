@@ -50,7 +50,7 @@ class WebSearchTool(BaseTool):
     reasoning: str = Field(description="Why this search is needed and what to expect")
     query: str = Field(description="Search query in same language as user request")
     max_results: int = Field(
-        description="Maximum results. How much of the web results selection you want to retrieve",
+        description="Maximum results (integer 1-10). How much of the web results selection you want to retrieve. Default 5.",
         default=5,
         ge=1,
         le=10,

@@ -35,7 +35,9 @@ class FinalRAGAnswerTool(BaseTool):
 
     reasoning: str = Field(description="Why task is now complete and how answer was verified")
     completed_steps: list[str] = Field(
-        description="Summary of completed steps including verification", min_length=1, max_length=5
+        description="Summary of completed steps including verification. REQUIRED: list of 1-5 items.",
+        min_length=1,
+        max_length=5,
     )
     section_numbers: list[str] = Field(
         default_factory=list,

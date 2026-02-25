@@ -9,11 +9,23 @@ from typing import Literal, Type
 import openai
 from openai import AsyncOpenAI, pydantic_function_tool
 from loguru import logger
+from pydantic import ValidationError
 
 from api.agents.agent_definition import AgentConfig
 from api.agents.base_agent import BaseAgent
 from api.agents.base_tool import BaseTool
 from api.agents.tools.reasoning_tool import ReasoningTool
+
+
+def _format_validation_error(e: ValidationError) -> str:
+    """Форматирует Pydantic ValidationError: перечисляет поле и сообщение."""
+    parts = []
+    for err in e.errors():
+        loc = ".".join(str(x) for x in err.get("loc", ()))
+        msg = err.get("msg", "")
+        kind = err.get("type", "")
+        parts.append(f"{loc}: {msg} (type={kind})")
+    return "; ".join(parts) if parts else str(e)
 
 
 class SGRToolCallingAgent(BaseAgent):
@@ -93,7 +105,21 @@ class SGRToolCallingAgent(BaseAgent):
                             if event.type == "chunk":
                                 self.streaming_generator.add_chunk(event.chunk)
                         completion = await stream.get_final_completion()
-                    reasoning = completion.choices[0].message.tool_calls[0].function.parsed_arguments
+                    if not completion or not getattr(completion, "choices", None):
+                        raise ValueError("Стриминг вернул пустой completion или без choices")
+                    if not completion.choices:
+                        raise ValueError("completion.choices пустой")
+                    msg = completion.choices[0].message if completion.choices[0] else None
+                    if not msg or not getattr(msg, "tool_calls", None) or not msg.tool_calls:
+                        raise ValueError("Ответ LLM не содержит tool_calls (reasoning)")
+                    fn = msg.tool_calls[0].function if msg.tool_calls[0] else None
+                    if not fn:
+                        raise ValueError("tool_calls[0].function отсутствует")
+                    reasoning = getattr(fn, "parsed_arguments", None)
+                    if reasoning is None and getattr(fn, "arguments", None):
+                        reasoning = ReasoningTool.model_validate_json(fn.arguments)
+                    if reasoning is None:
+                        raise ValueError("Не удалось получить parsed_arguments для reasoning")
                 else:
                     completion = await self.openai_client.chat.completions.create(
                         messages=messages,
@@ -157,15 +183,29 @@ class SGRToolCallingAgent(BaseAgent):
                 else:
                     self.logger.error(f"Не удалось выполнить reasoning после {max_retries} попыток: {e}")
                     raise RuntimeError(f"Ошибка reasoning после {max_retries} попыток: {e}") from e
-            except Exception as e:
-                # Другие ошибки - повторяем, если есть попытки
+            except ValidationError as e:
+                detail = _format_validation_error(e)
                 last_error = e
                 if attempt < max_retries - 1:
-                    self.logger.warning(f"Неожиданная ошибка при reasoning (попытка {attempt + 1}/{max_retries}): {e}")
+                    self.logger.warning(
+                        f"Ошибка валидации reasoning (попытка {attempt + 1}/{max_retries}): {detail}"
+                    )
+                    continue
+                else:
+                    self.logger.error(f"Ошибка валидации reasoning после {max_retries} попыток: {detail}")
+                    raise RuntimeError(f"Ошибка валидации reasoning: {detail}") from e
+            except Exception as e:
+                # Другие ошибки - повторяем, если есть попытки; логируем тип и текст
+                last_error = e
+                err_msg = f"{type(e).__name__}: {e}"
+                if attempt < max_retries - 1:
+                    self.logger.warning(
+                        f"Неожиданная ошибка при reasoning (попытка {attempt + 1}/{max_retries}): {err_msg}"
+                    )
                     continue
                 else:
                     self.logger.exception("Неожиданная ошибка при reasoning")
-                    raise RuntimeError(f"Ошибка reasoning: {e}") from e
+                    raise RuntimeError(f"Ошибка reasoning: {err_msg}") from e
 
         # Если дошли сюда, значит все попытки исчерпаны
         if last_error:

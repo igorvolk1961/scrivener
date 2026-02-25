@@ -141,6 +141,8 @@ class DocumentRetriever:
                 import json
                 # Форматируем метаданные в читаемом виде
                 for key, value in sorted(metadata.items()):
+                    if key == 'content':
+                        continue
                     if isinstance(value, (dict, list)):
                         value_str = json.dumps(value, ensure_ascii=False, indent=2)
                         logger.info(f"  {key}:")
