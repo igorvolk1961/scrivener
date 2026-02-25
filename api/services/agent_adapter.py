@@ -122,6 +122,11 @@ def create_agent_definition_from_request(
         user_info=user_info,  # Передаем информацию о пользователе для замены {userPost}
     )
     
+    # Хук до цикла: при RAG — безусловный первый RetrievalTool с точным запросом пользователя
+    before_execution_loop_hook = None
+    if request.knowledge_base:
+        before_execution_loop_hook = "api.agents.hooks.rag_initial_retrieval_hook.RAGInitialRetrievalHook"
+
     # Создаем AgentDefinition
     agent_def = AgentDefinition(
         name=f"agent_{uuid.uuid4()}",
@@ -131,6 +136,7 @@ def create_agent_definition_from_request(
         search=search_config,
         execution=execution_config,
         prompts=prompts_config,
+        before_execution_loop_hook=before_execution_loop_hook,
     )
     
     return agent_def

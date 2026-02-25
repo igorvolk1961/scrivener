@@ -167,6 +167,10 @@ class AgentDefinition(AgentConfig):
     # ToDo: not sure how to type this properly and avoid circular imports
     base_class: type[Any] | ImportString | str = Field(description="Agent class name")
     tools: list[type[Any] | str] = Field(default_factory=list, description="List of tool names to include")
+    before_execution_loop_hook: type[Any] | str | None = Field(
+        default=None,
+        description="Optional hook class or import path (e.g. api.agents.hooks.rag_initial_retrieval_hook.RAGInitialRetrievalHook), run once before the main loop",
+    )
 
     @field_validator("base_class", mode="before")
     def base_class_import_points_to_file(cls, v: Any) -> Any:
@@ -188,6 +192,22 @@ class AgentDefinition(AgentConfig):
                     file_path = Path(*module_parts[:-1]).with_suffix(".py")
                     raise FileNotFoundError(
                         f"base_class import '{v}' points to '{file_path}', "
+                        f"but the file could not be found in sys.path"
+                    )
+        return v
+
+    @field_validator("before_execution_loop_hook", mode="before")
+    def before_execution_loop_hook_import_points_to_file(cls, v: Any) -> Any:
+        """If before_execution_loop_hook is a dotted import path, ensure the module exists."""
+        if isinstance(v, str) and "." in v:
+            module_parts = v.split(".")
+            if len(module_parts) >= 2:
+                module_path = ".".join(module_parts[:-1])
+                spec = importlib.util.find_spec(module_path)
+                if spec is None or spec.origin is None:
+                    file_path = Path(*module_parts[:-1]).with_suffix(".py")
+                    raise FileNotFoundError(
+                        f"before_execution_loop_hook import '{v}' points to '{file_path}', "
                         f"but the file could not be found in sys.path"
                     )
         return v

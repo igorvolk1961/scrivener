@@ -3,6 +3,7 @@
 Адаптировано из sgr-agent-core.
 """
 
+import importlib
 import json
 import logging
 import os
@@ -199,6 +200,17 @@ class BaseAgent(AgentRegistryMixin):
     ):
         self.logger.info(f"🚀 User provided {len(self.task_messages)} messages.")
         try:
+            hook_spec = getattr(self.config, "before_execution_loop_hook", None)
+            if hook_spec is not None:
+                hook_class = hook_spec
+                if isinstance(hook_spec, str):
+                    module_path, _, class_name = hook_spec.rpartition(".")
+                    if module_path and class_name:
+                        module = importlib.import_module(module_path)
+                        hook_class = getattr(module, class_name)
+                if hook_class is not None:
+                    hook = hook_class()
+                    await hook.run(self)
             while self._context.state not in AgentStatesEnum.FINISH_STATES.value:
                 self._context.iteration += 1
                 self.logger.info(f"Step {self._context.iteration} started")
