@@ -56,13 +56,15 @@ class SGRToolCallingAgent(BaseAgent):
     def _log_reasoning(self, result: ReasoningTool) -> None:
         """Логирование reasoning фазы."""
         next_step = result.remaining_steps[0] if result.remaining_steps else "Completing"
+        sit = (result.current_situation or "")[:400]
+        plan = (result.plan_status or "")[:400]
         self.logger.info(
             f"""
     ###############################################
     🤖 LLM RESPONSE DEBUG:
        🧠 Reasoning Steps: {result.reasoning_steps}
-       📊 Current Situation: '{result.current_situation[:400]}...'
-       📋 Plan Status: '{result.plan_status[:400]}...'
+       📊 Current Situation: '{sit}...'
+       📋 Plan Status: '{plan}...'
        🔍 Searches Done: {self._context.searches_used}
        🔍 Clarifications Done: {self._context.clarifications_used}
        ✅ Enough Data: {result.enough_data}

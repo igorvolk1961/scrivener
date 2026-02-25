@@ -43,7 +43,7 @@ class FinalRAGAnswerTool(BaseTool):
         default_factory=list,
         description="Перечень номеров разделов (section_number) в метаданных у релевантных чанков ")
     answer: str = Field(
-        description="Comprehensive final answer with EXACT factual details (dates, numbers, names). "
+        description="Comprehensive final well structured answer in MARKDOWN format with EXACT factual details (dates, numbers, names). "
                     "For knowledge base queries: answer must contain ONLY information from the knowledge base. "
                     "Cite as [source_number](section_number_if_present): source_number is the document position in knowledge_base_sources (if 1 document, use [1] only; never [2],[3] for same document). "
                     "In parentheses add section number from chunk metadata (e.g. [1](2.1)) when the fact is a specific section with section_number='2.1' in source 1."
